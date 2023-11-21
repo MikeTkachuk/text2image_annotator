@@ -5,7 +5,6 @@ from pathlib import Path
 from tkinter import filedialog, ttk, scrolledtext
 from PIL import Image, ImageTk
 
-
 IMG_SIZE = 512
 THUMBNAIL_SIZE = 64
 
@@ -62,7 +61,8 @@ class ImageViewerApp:
         self.image_label.grid(row=0, column=0, pady=10, padx=10, sticky="n")
 
         self._placeholder_preview = ImageTk.PhotoImage(Image.new("RGB", (4 * THUMBNAIL_SIZE, THUMBNAIL_SIZE),
-                                                         (255, 255, 255)))  # used whenever preview is turned off
+                                                                 (
+                                                                 255, 255, 255)))  # used whenever preview is turned off
         self.preview_label = ttk.Label(self.media_frame, image=self._placeholder_preview)
         self.preview_label.grid(row=1, column=0, pady=10, padx=10, sticky="n")
 
@@ -71,14 +71,14 @@ class ImageViewerApp:
         self.inputs_frame.grid(row=0, column=1)
 
         self.text_entry = scrolledtext.ScrolledText(self.inputs_frame, width=30, height=8, )
-        self.text_entry.grid(row=0, column=0, pady="0 20")
+        self.text_entry.grid(row=0, column=0, pady="0 20", sticky="w")
 
         # # Tags preview
-        self.tags_preview_frame = tk.Frame(self.inputs_frame, width=250)
-        self.tags_preview_frame.grid(row=1, column=0, pady="0 20", sticky="w")
+        self.tags_preview_frame = tk.Frame(self.inputs_frame, width=400)
+        self.tags_preview_frame.grid(row=0, column=1, pady="0 20", sticky="wn")
 
+        self.tag_to_row = {}
         self.tags_list = []
-        self._tags_grid_loc = []
 
         # # Tags selection
         self.tag_frame = tk.Frame(self.inputs_frame)
@@ -100,7 +100,8 @@ class ImageViewerApp:
 
         self.tag_choice.bind("<Return>", self.select_tag)
         self.tag_choice.bind("<Double-1>", self.select_tag)
-        self.tag_choice.bind("<Escape>", lambda x: self.tag_search.focus_set())
+        self.tag_choice.bind("<Escape>", lambda x: (self.tag_search.focus_set(),
+                                                    self.tag_search.selection_range(0, 'end')))
         self.tag_search.bind("<Down>", lambda x: self.tag_choice.focus_set())
         self.tag_search.bind("<Up>", lambda x: self.tag_choice.focus_set())
 
@@ -128,6 +129,13 @@ class ImageViewerApp:
                                                 variable=preview_checkbox_value)
         self.preview_checkbox.variable = preview_checkbox_value
         self.preview_checkbox.grid(row=0, column=4, padx="20 0")
+
+        tags_render_value = tk.IntVar()
+        self.tags_render_checkbox = ttk.Checkbutton(self.control_frame, text="Edit tags",
+                                                    state="deselected", command=self.show_image_metadata,
+                                                    variable=tags_render_value)
+        self.tags_render_checkbox.variable = tags_render_value
+        self.tags_render_checkbox.grid(row=0, column=5, padx="20 0")
 
         self.master.bind("<Control-Right>", lambda x: self.show_next_image())
         self.master.bind("<Control-Left>", lambda x: self.show_previous_image())
@@ -178,7 +186,7 @@ class ImageViewerApp:
 
         self.image_paths = [str(f) for f in image_dir.rglob("*") if f.suffix in [".jpeg", ".jpg", ".png"]]
         self.create_session_config(image_dir)
-
+        self.current_index = 0
         self.show_current_image()
 
     def make_record(self):
@@ -195,24 +203,43 @@ class ImageViewerApp:
         self.save_state()
 
     def _add_tag_widget(self, tag_text):
-        tag_button = tk.Button(master=self.tags_preview_frame, text=tag_text, wraplength=100)
-        tag_button.config(command=self.make_remove_tag_func(tag_button))
-        # tag_button.update_idletasks()
-        tag_button_width = tag_button.winfo_reqwidth()
+        if not self.tags_render_checkbox.variable.get():
+            tags_label = list(self.tags_preview_frame.children.values())[0]
+            tags_label.config(text=tags_label.cget("text") + tag_text + "; ")
+            self.tags_list.append(tk.Button(text=tag_text))
+            return
+
+        def _create_tag(master_el):
+            out = tk.Button(master=master_el, text=tag_text,
+                            wraplength=self.tags_preview_frame.cget("width") - 10)
+            out.config(command=self.make_remove_tag_func(out))
+            return out
+
+        if self.tags_list:
+            last_tag = self.tags_list[-1]
+            last_row = self.tag_to_row[last_tag]
+        else:  # init the first row and exit
+            last_row = tk.Frame(master=self.tags_preview_frame)
+            last_row.pack(side="top", anchor="nw")
+            tag_button = _create_tag(last_row)
+            tag_button.pack(side="left", anchor="nw")
+            self.tags_list.append(tag_button)
+            self.tag_to_row[tag_button] = last_row
+            return
+
+        tag_button = _create_tag(last_row)
+        tag_button.pack(side="left", anchor="nw")
         max_width = self.tags_preview_frame.cget("width")
-        current_row_widths = []
-        for t, loc in zip(self.tags_list, self._tags_grid_loc):
-            if loc[0] == self._tags_grid_loc[-1][0]:
-                current_row_widths.append(t.winfo_reqwidth())
-        spare_space = max_width - sum(current_row_widths)
-        last_loc = self._tags_grid_loc[-1] if self._tags_grid_loc else (0, -1)
-        if tag_button_width < spare_space:
-            new_loc = (last_loc[0], last_loc[1] + 1)
-        else:
-            new_loc = (last_loc[0] + 1, 0)
-        self._tags_grid_loc.append(new_loc)
-        tag_button.grid(row=new_loc[0], column=new_loc[1], sticky="w")
+        last_row.update_idletasks()
+        current_row_width = last_row.winfo_reqwidth()
+        if current_row_width > max_width:
+            tag_button.destroy()
+            last_row = tk.Frame(master=self.tags_preview_frame)
+            last_row.pack(side="top", anchor="nw")
+            tag_button = _create_tag(last_row)
+            tag_button.pack(side="left", anchor="nw")
         self.tags_list.append(tag_button)
+        self.tag_to_row[tag_button] = last_row
 
     def show_image_metadata(self):
         current_meta = self._get_current_meta()
@@ -220,12 +247,19 @@ class ImageViewerApp:
         self.text_entry.delete("1.0", "end")
         self.text_entry.insert("1.0", current_prompt)
         self.preview_routine()
-        self.filter_tag_choice(None)
+        self.filter_tag_choice()
 
         for t in self.tags_list:
             t.destroy()
+        for row in list(self.tags_preview_frame.children.values()):
+            row.destroy()
         self.tags_list = []
-        self._tags_grid_loc = []
+        self.tag_to_row = {}
+        should_render = self.tags_render_checkbox.variable.get()
+        if not should_render:
+            tags_label = tk.Label(master=self.tags_preview_frame, text="",
+                                  wraplength=self.tags_preview_frame.cget("width"))
+            tags_label.pack()
         for tag_text in current_meta.get("tags", []):
             self._add_tag_widget(tag_text)
 
@@ -279,7 +313,7 @@ class ImageViewerApp:
                 return
             search_cursor += 1
 
-    def filter_tag_choice(self, event):
+    def filter_tag_choice(self, event=None):
         if self.session_config is None:
             return
 
@@ -296,14 +330,13 @@ class ImageViewerApp:
         if self.tag_search.get() in self.session_config["tags"]:
             return
         self.session_config["tags"].append(self.tag_search.get())
-        self.filter_tag_choice(None)
+        self.filter_tag_choice()
         self.save_state()
 
     def remove_tag(self, tag_widget):
         tag_id = self.tags_list.index(tag_widget)
         self.tags_list.pop(tag_id)
-        self._tags_grid_loc.pop(tag_id)
-        tag_widget.destroy()
+        self.tag_to_row.pop(tag_widget)
         self.make_record()
 
         self.show_image_metadata()  # reload metadata after update
@@ -311,7 +344,7 @@ class ImageViewerApp:
     def make_remove_tag_func(self, tag_widget):
         return lambda: self.remove_tag(tag_widget)
 
-    def select_tag(self, event):
+    def select_tag(self, event=None):
         selected_ids = self.tag_choice.curselection()
         if selected_ids:
             selected_value = self.tag_choice.get(selected_ids)
@@ -326,4 +359,6 @@ if __name__ == "__main__":
 
     app = ImageViewerApp(root)
     root.geometry("+100+10")
+    root.state('zoomed')
+
     root.mainloop()
