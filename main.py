@@ -88,6 +88,8 @@ class ImageViewerApp:
         self.tag_search.grid(row=0, column=0, pady="0 10", sticky="w")
         self.tag_search.bind("<KeyRelease>", self.filter_tag_choice)
         self.tag_search.bind("<Return>", self.add_tag)
+        self.tag_search.bind("<Control-Return>", lambda x: (self.add_tag(),
+                                                            self.tag_choice.select_set(0), self.select_tag()))
 
         self.add_tag_button = ttk.Button(self.tag_frame, text="Add Tag", command=self.add_tag)
         self.add_tag_button.grid(row=0, column=1, padx=10, pady="0 10")
@@ -102,8 +104,8 @@ class ImageViewerApp:
         self.tag_choice.bind("<Double-1>", self.select_tag)
         self.tag_choice.bind("<Escape>", lambda x: (self.tag_search.focus_set(),
                                                     self.tag_search.selection_range(0, 'end')))
-        self.tag_search.bind("<Down>", lambda x: self.tag_choice.focus_set())
-        self.tag_search.bind("<Up>", lambda x: self.tag_choice.focus_set())
+        self.tag_search.bind("<Down>", lambda x: (self.tag_choice.focus_set(), self.tag_choice.selection_set(0)))
+        self.tag_search.bind("<Up>", lambda x: (self.tag_choice.focus_set(), self.tag_choice.selection_set("end")))
 
         # Controls
         self.control_frame = ttk.Frame(self.frame_master)
@@ -136,6 +138,9 @@ class ImageViewerApp:
                                                     variable=tags_render_value)
         self.tags_render_checkbox.variable = tags_render_value
         self.tags_render_checkbox.grid(row=0, column=5, padx="20 0")
+
+        self.progress_info = tk.Label(self.control_frame, text="")
+        self.progress_info.grid(row=1, column=0, sticky="w")
 
         self.master.bind("<Control-Right>", lambda x: self.show_next_image())
         self.master.bind("<Control-Left>", lambda x: self.show_previous_image())
@@ -248,6 +253,8 @@ class ImageViewerApp:
         self.text_entry.insert("1.0", current_prompt)
         self.preview_routine()
         self.filter_tag_choice()
+        self.progress_info.config(text=f"Progress: {len(self.session_config['data'])}/{len(self.image_paths)}\n"
+                                       f"Id: {self.current_index}")
 
         for t in self.tags_list:
             t.destroy()
@@ -257,7 +264,7 @@ class ImageViewerApp:
         self.tag_to_row = {}
         should_render = self.tags_render_checkbox.variable.get()
         if not should_render:
-            tags_label = tk.Label(master=self.tags_preview_frame, text="",
+            tags_label = tk.Label(master=self.tags_preview_frame, text="", font=("Arial", 12),
                                   wraplength=self.tags_preview_frame.cget("width"))
             tags_label.pack()
         for tag_text in current_meta.get("tags", []):
@@ -305,11 +312,12 @@ class ImageViewerApp:
         if not self.image_paths:
             return
 
+        self.make_record()
         search_cursor = self.current_index
-        while search_cursor < (len(self.image_paths) - 1):
-            if self.image_paths[search_cursor + 1] not in self.session_config["data"]:
+        while search_cursor < (len(self.image_paths)):
+            if self.image_paths[search_cursor] not in self.session_config["data"]:
                 self.current_index = search_cursor
-                self.show_next_image()
+                self.show_current_image()
                 return
             search_cursor += 1
 
@@ -318,7 +326,7 @@ class ImageViewerApp:
             return
 
         search_key = self.tag_search.get()
-        tags_pool = self.session_config["tags"]
+        tags_pool = sorted(self.session_config["tags"])
         filtered = [t for t in tags_pool if search_key in t]
         self.tag_choice.delete(0, 'end')
         for t in filtered:
