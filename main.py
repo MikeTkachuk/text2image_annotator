@@ -313,7 +313,7 @@ class ImageViewerApp:
             return
 
         self.make_record()
-        search_cursor = self.current_index
+        search_cursor = self.current_index + 1
         while search_cursor < (len(self.image_paths)):
             if self.image_paths[search_cursor] not in self.session_config["data"]:
                 self.current_index = search_cursor
