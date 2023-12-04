@@ -48,7 +48,7 @@ class ImageViewerApp:
         self.master = master
         self.master.title("Image Viewer")
 
-        self.frame_master = ttk.Frame(master=root, padding=10)
+        self.frame_master = ttk.Frame(master=root, padding=4)
         self.frame_master.grid(row=0, column=0)
 
         # Media
@@ -58,7 +58,7 @@ class ImageViewerApp:
         placeholder_image = ImageTk.PhotoImage(Image.new("RGB", (IMG_SIZE, IMG_SIZE), (255, 255, 255)))
         self.image_label = ttk.Label(self.media_frame, image=placeholder_image)
         self.image_label.image = placeholder_image
-        self.image_label.grid(row=0, column=0, pady=10, padx=10, sticky="n")
+        self.image_label.grid(row=0, column=0, pady=5, padx=10, sticky="n")
 
         self._placeholder_preview = ImageTk.PhotoImage(Image.new("RGB", (4 * THUMBNAIL_SIZE, THUMBNAIL_SIZE),
                                                                  (
@@ -74,7 +74,7 @@ class ImageViewerApp:
         self.text_entry.grid(row=0, column=0, pady="0 20", sticky="w")
 
         # # Tags preview
-        self.tags_preview_frame = tk.Frame(self.inputs_frame, width=400)
+        self.tags_preview_frame = tk.Frame(self.inputs_frame, width=350)
         self.tags_preview_frame.grid(row=0, column=1, pady="0 20", sticky="wn")
 
         self.tag_to_row = {}
@@ -341,7 +341,7 @@ class ImageViewerApp:
         self.filter_tag_choice()
         self.save_state()
 
-    def remove_tag(self, tag_widget):
+    def _helper_remove_tag(self, tag_widget):
         tag_id = self.tags_list.index(tag_widget)
         self.tags_list.pop(tag_id)
         self.tag_to_row.pop(tag_widget)
@@ -350,7 +350,7 @@ class ImageViewerApp:
         self.show_image_metadata()  # reload metadata after update
 
     def make_remove_tag_func(self, tag_widget):
-        return lambda: self.remove_tag(tag_widget)
+        return lambda: self._helper_remove_tag(tag_widget)
 
     def select_tag(self, event=None):
         selected_ids = self.tag_choice.curselection()
