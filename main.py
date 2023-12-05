@@ -4,6 +4,9 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk, scrolledtext
 from PIL import Image, ImageTk
+from tqdm import tqdm
+
+from tag_recommendation import EmbeddingStore
 
 IMG_SIZE = 512
 THUMBNAIL_SIZE = 64
@@ -62,7 +65,8 @@ class ImageViewerApp:
 
         self._placeholder_preview = ImageTk.PhotoImage(Image.new("RGB", (4 * THUMBNAIL_SIZE, THUMBNAIL_SIZE),
                                                                  (
-                                                                 255, 255, 255)))  # used whenever preview is turned off
+                                                                     255, 255,
+                                                                     255)))  # used whenever preview is turned off
         self.preview_label = ttk.Label(self.media_frame, image=self._placeholder_preview)
         self.preview_label.grid(row=1, column=0, pady=10, padx=10, sticky="n")
 
@@ -79,6 +83,21 @@ class ImageViewerApp:
 
         self.tag_to_row = {}
         self.tags_list = []
+
+        # # CLIP settings
+        self.emb_store = None
+        self.tag_rec_frame = tk.Frame(self.inputs_frame)
+        self.tag_rec_frame.grid(row=2, column=1, pady="0 20", sticky="ws")
+        self.tag_rec_mode = tk.StringVar()
+        self.tag_rec_mode.set("alphabetic")
+        self.tag_rec_mode_menu = tk.OptionMenu(self.tag_rec_frame, self.tag_rec_mode, self.tag_rec_mode.get(),
+                                               *("openai/clip-vit-base-patch32",
+                                                 "openai/clip-vit-large-patch14", "popularity"))
+        self.tag_rec_mode_menu.grid(row=0, column=0, sticky="ws")
+
+        self.recompute_button = tk.Button(self.tag_rec_frame, text="Recompute",
+                                          command=self.recompute_recommendation)
+        self.recompute_button.grid(row=0, column=1, sticky="ws")
 
         # # Tags selection
         self.tag_frame = tk.Frame(self.inputs_frame)
@@ -321,17 +340,6 @@ class ImageViewerApp:
                 return
             search_cursor += 1
 
-    def filter_tag_choice(self, event=None):
-        if self.session_config is None:
-            return
-
-        search_key = self.tag_search.get()
-        tags_pool = sorted(self.session_config["tags"])
-        filtered = [t for t in tags_pool if search_key in t]
-        self.tag_choice.delete(0, 'end')
-        for t in filtered:
-            self.tag_choice.insert('end', t)
-
     def add_tag(self, event=None):
         if self.session_config is None:
             return
@@ -360,6 +368,44 @@ class ImageViewerApp:
                 return
             self._add_tag_widget(selected_value)
             self.make_record()
+
+    def filter_tag_choice(self, event=None):
+        if self.session_config is None:
+            return
+
+        search_key = self.tag_search.get()
+        tags_pool = self.sort_tags()
+        filtered = [t for t in tags_pool if search_key in t]
+        self.tag_choice.delete(0, 'end')
+        for t in filtered:
+            self.tag_choice.insert('end', t)
+
+    def sort_tags(self):
+        if self.tag_rec_mode.get() == "alphabetic":
+            return sorted(self.session_config["tags"])
+        if self.tag_rec_mode.get() == "popularity":
+            raise NotImplementedError
+        self.recompute_recommendation()
+        return self.emb_store.get_tag_ranks(self.session_config["tags"],
+                                            self.image_paths[self.current_index],
+                                            self.session_config["target"])
+
+    def recompute_recommendation(self):
+        if self.session_config is None:
+            return
+        if "clip" not in self.tag_rec_mode.get():
+            return
+
+        if self.emb_store is None:
+            emb_store_path = "." + Path(self.session_config["target"]).name
+            self.emb_store = EmbeddingStore(emb_store_path, model_name=self.tag_rec_mode.get())
+
+        for img_path in tqdm(self.session_config["data"], desc="Loading image embeddings"):
+            self.emb_store.get_image_embedding(img_path, self.session_config["target"])
+
+        for tag in tqdm(self.session_config["tags"], desc="Loading tag embeddings"):
+            self.emb_store.get_tag_embedding(tag)
+
 
 
 if __name__ == "__main__":
