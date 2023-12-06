@@ -35,6 +35,13 @@ def resize_pad_square(image_path, size):
     return square_image
 
 
+def sort_with_ranks(seq, ranks, reverse=True):
+    assert len(seq) == len(ranks)
+    cat = list(zip(seq, ranks))
+    sorted_cat = sorted(cat, key=lambda x: x[1], reverse=reverse)
+    return [cat_el[0] for cat_el in sorted_cat]
+
+
 class ImageViewerApp:
     def __init__(self, master):
         self.session_config_path = Path("sessions.json")
@@ -96,7 +103,7 @@ class ImageViewerApp:
         self.tag_rec_mode_menu.grid(row=0, column=0, sticky="ws")
 
         self.recompute_button = tk.Button(self.tag_rec_frame, text="Recompute",
-                                          command=self.recompute_recommendation)
+                                          command=self.filter_tag_choice)
         self.recompute_button.grid(row=0, column=1, sticky="ws")
 
         # # Tags selection
@@ -386,9 +393,10 @@ class ImageViewerApp:
         if self.tag_rec_mode.get() == "popularity":
             raise NotImplementedError
         self.recompute_recommendation()
-        return self.emb_store.get_tag_ranks(self.session_config["tags"],
-                                            self.image_paths[self.current_index],
-                                            self.session_config["target"])
+        ranks = self.emb_store.get_tag_ranks(self.session_config["tags"],
+                                             self.image_paths[self.current_index],
+                                             self.session_config["target"])
+        return sort_with_ranks(self.session_config["tags"], ranks)
 
     def recompute_recommendation(self):
         if self.session_config is None:
@@ -406,6 +414,8 @@ class ImageViewerApp:
         for tag in tqdm(self.session_config["tags"], desc="Loading tag embeddings"):
             self.emb_store.get_tag_embedding(tag)
 
+        # perform training
+        # =====
 
 
 if __name__ == "__main__":
