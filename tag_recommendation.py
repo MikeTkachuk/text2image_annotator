@@ -63,6 +63,7 @@ class EmbeddingStore:
         else:
             self.tag_embeddings = {}
 
+    @torch.no_grad()
     def get_image_embedding(self, abs_path, folder_path):
         rel_path = Path(abs_path).relative_to(folder_path)
         abs_emb_path = self.store_path / rel_path.parent / (rel_path.stem + ".pt")
@@ -74,6 +75,7 @@ class EmbeddingStore:
             torch.save(embedding, abs_emb_path)
         return embedding
 
+    @torch.no_grad()
     def add_tag(self, tag: Union[List[str], str]):
         if isinstance(tag, str):
             tag = [tag]
@@ -88,13 +90,15 @@ class EmbeddingStore:
 
         return self.tag_embeddings[tag]
 
+    @torch.no_grad()
     def get_tag_ranks(self, tag_list, image_abs_path, folder_path):
         image_embedding = self.get_image_embedding(image_abs_path, folder_path)
         unprocessed_tags = [t for t in tag_list if t not in self.tag_embeddings]
-        self.add_tag(unprocessed_tags)
-        tag_embedding = torch.cat([self.tag_embeddings[t] for t in tag_list], dim=0)
+        if unprocessed_tags:
+            self.add_tag(unprocessed_tags)
+        tag_embedding = torch.cat([self.tag_embeddings[t].reshape(1, -1) for t in tag_list], dim=0)
         cosines = image_embedding @ tag_embedding.T / (image_embedding.norm() * tag_embedding.norm(dim=1))
 
-        return cosines.numpy().tolist()
+        return cosines.squeeze().cpu().numpy().tolist()
 
     # TODO connect session config and emb store to do finetuning
