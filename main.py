@@ -4,6 +4,9 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk, scrolledtext
 from PIL import Image, ImageTk
+from tqdm import tqdm
+
+from tag_recommendation import EmbeddingStore
 
 IMG_SIZE = 512
 THUMBNAIL_SIZE = 64
@@ -32,6 +35,13 @@ def resize_pad_square(image_path, size):
     return square_image
 
 
+def sort_with_ranks(seq, ranks, reverse=True):
+    assert len(seq) == len(ranks)
+    cat = list(zip(seq, ranks))
+    sorted_cat = sorted(cat, key=lambda x: x[1], reverse=reverse)
+    return [cat_el[0] for cat_el in sorted_cat]
+
+
 class ImageViewerApp:
     def __init__(self, master):
         self.session_config_path = Path("sessions.json")
@@ -48,7 +58,7 @@ class ImageViewerApp:
         self.master = master
         self.master.title("Image Viewer")
 
-        self.frame_master = ttk.Frame(master=root, padding=10)
+        self.frame_master = ttk.Frame(master=root, padding=4)
         self.frame_master.grid(row=0, column=0)
 
         # Media
@@ -58,11 +68,12 @@ class ImageViewerApp:
         placeholder_image = ImageTk.PhotoImage(Image.new("RGB", (IMG_SIZE, IMG_SIZE), (255, 255, 255)))
         self.image_label = ttk.Label(self.media_frame, image=placeholder_image)
         self.image_label.image = placeholder_image
-        self.image_label.grid(row=0, column=0, pady=10, padx=10, sticky="n")
+        self.image_label.grid(row=0, column=0, pady=5, padx=10, sticky="n")
 
         self._placeholder_preview = ImageTk.PhotoImage(Image.new("RGB", (4 * THUMBNAIL_SIZE, THUMBNAIL_SIZE),
                                                                  (
-                                                                 255, 255, 255)))  # used whenever preview is turned off
+                                                                     255, 255,
+                                                                     255)))  # used whenever preview is turned off
         self.preview_label = ttk.Label(self.media_frame, image=self._placeholder_preview)
         self.preview_label.grid(row=1, column=0, pady=10, padx=10, sticky="n")
 
@@ -74,11 +85,26 @@ class ImageViewerApp:
         self.text_entry.grid(row=0, column=0, pady="0 20", sticky="w")
 
         # # Tags preview
-        self.tags_preview_frame = tk.Frame(self.inputs_frame, width=400)
+        self.tags_preview_frame = tk.Frame(self.inputs_frame, width=350)
         self.tags_preview_frame.grid(row=0, column=1, pady="0 20", sticky="wn")
 
         self.tag_to_row = {}
         self.tags_list = []
+
+        # # CLIP settings
+        self.emb_store = None
+        self.tag_rec_frame = tk.Frame(self.inputs_frame)
+        self.tag_rec_frame.grid(row=2, column=1, pady="0 20", sticky="ws")
+        self.tag_rec_mode = tk.StringVar()
+        self.tag_rec_mode.set("alphabetic")
+        self.tag_rec_mode_menu = tk.OptionMenu(self.tag_rec_frame, self.tag_rec_mode, self.tag_rec_mode.get(),
+                                               *("openai/clip-vit-base-patch32",
+                                                 "openai/clip-vit-large-patch14", "popularity"))
+        self.tag_rec_mode_menu.grid(row=0, column=0, sticky="ws")
+
+        self.recompute_button = tk.Button(self.tag_rec_frame, text="Recompute",
+                                          command=self.filter_tag_choice)
+        self.recompute_button.grid(row=0, column=1, sticky="ws")
 
         # # Tags selection
         self.tag_frame = tk.Frame(self.inputs_frame)
@@ -313,24 +339,13 @@ class ImageViewerApp:
             return
 
         self.make_record()
-        search_cursor = self.current_index
+        search_cursor = self.current_index + 1
         while search_cursor < (len(self.image_paths)):
             if self.image_paths[search_cursor] not in self.session_config["data"]:
                 self.current_index = search_cursor
                 self.show_current_image()
                 return
             search_cursor += 1
-
-    def filter_tag_choice(self, event=None):
-        if self.session_config is None:
-            return
-
-        search_key = self.tag_search.get()
-        tags_pool = sorted(self.session_config["tags"])
-        filtered = [t for t in tags_pool if search_key in t]
-        self.tag_choice.delete(0, 'end')
-        for t in filtered:
-            self.tag_choice.insert('end', t)
 
     def add_tag(self, event=None):
         if self.session_config is None:
@@ -341,7 +356,7 @@ class ImageViewerApp:
         self.filter_tag_choice()
         self.save_state()
 
-    def remove_tag(self, tag_widget):
+    def _helper_remove_tag(self, tag_widget):
         tag_id = self.tags_list.index(tag_widget)
         self.tags_list.pop(tag_id)
         self.tag_to_row.pop(tag_widget)
@@ -350,7 +365,7 @@ class ImageViewerApp:
         self.show_image_metadata()  # reload metadata after update
 
     def make_remove_tag_func(self, tag_widget):
-        return lambda: self.remove_tag(tag_widget)
+        return lambda: self._helper_remove_tag(tag_widget)
 
     def select_tag(self, event=None):
         selected_ids = self.tag_choice.curselection()
@@ -360,6 +375,47 @@ class ImageViewerApp:
                 return
             self._add_tag_widget(selected_value)
             self.make_record()
+
+    def filter_tag_choice(self, event=None):
+        if self.session_config is None:
+            return
+
+        search_key = self.tag_search.get()
+        tags_pool = self.sort_tags()
+        filtered = [t for t in tags_pool if search_key in t]
+        self.tag_choice.delete(0, 'end')
+        for t in filtered:
+            self.tag_choice.insert('end', t)
+
+    def sort_tags(self):
+        if self.tag_rec_mode.get() == "alphabetic":
+            return sorted(self.session_config["tags"])
+        if self.tag_rec_mode.get() == "popularity":
+            raise NotImplementedError
+        self.recompute_recommendation()
+        ranks = self.emb_store.get_tag_ranks(self.session_config["tags"],
+                                             self.image_paths[self.current_index],
+                                             self.session_config["target"])
+        return sort_with_ranks(self.session_config["tags"], ranks)
+
+    def recompute_recommendation(self):
+        if self.session_config is None:
+            return
+        if "clip" not in self.tag_rec_mode.get():
+            return
+
+        if self.emb_store is None:
+            emb_store_path = "." + Path(self.session_config["target"]).name
+            self.emb_store = EmbeddingStore(emb_store_path, model_name=self.tag_rec_mode.get())
+
+        for img_path in tqdm(self.session_config["data"], desc="Loading image embeddings"):
+            self.emb_store.get_image_embedding(img_path, self.session_config["target"])
+
+        for tag in tqdm(self.session_config["tags"], desc="Loading tag embeddings"):
+            self.emb_store.get_tag_embedding(tag)
+
+        # perform training
+        # =====
 
 
 if __name__ == "__main__":
