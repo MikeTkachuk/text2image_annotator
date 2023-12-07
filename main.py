@@ -49,20 +49,19 @@ def put_node(tree: ttk.Treeview, path, node: str, score=None):
         if not len(p.parents):
             return ''
         else:
-            return str(p)
+            return p.as_posix()
 
     path = Path(path)
-    try:
-        if len(path.parents):
-            for i in range(1, len(path.parents)):
-                tree.insert(path_to_node_id(path.parents[-i]),
-                            "end", path_to_node_id(path.parents[i + 1]),
-                            text=path.parents[-i - 1].name, open=True)
-            tree.insert(path_to_node_id(path.parents[0]), "end",
-                        path_to_node_id(path), text=path.name, open=True)
-    except tk.TclError:
-        pass
-    tree.insert(path_to_node_id(path), 'end', node, text=node,values=(score,))
+    parents = [path] + list(path.parents)
+    if len(parents) > 1:
+        for i in range(1, len(parents)):
+            parent_id = path_to_node_id(parents[-i])
+            node_id = path_to_node_id(parents[-i - 1])
+            if not tree.exists(node_id):
+                tree.insert(parent_id,
+                            "end", node_id,
+                            text=parents[-i - 1].name, open=True)
+    tree.insert(path_to_node_id(parents[0]), 'end', node, text=node, values=(score,))
 
 
 class ImageViewerApp:
@@ -148,12 +147,15 @@ class ImageViewerApp:
         self.tag_structure_label.grid(row=1, column=0, sticky="w")
         self.tag_structure_entry = ttk.Entry(self.tag_input_frame, width=30)
         self.tag_structure_entry.grid(row=1, column=1, sticky="w")
+        self.tag_structure_entry.bind("<Return>", self.add_tag)
 
         self.add_tag_button = ttk.Button(self.tag_input_frame, text="Add Tag", command=self.add_tag)
         self.add_tag_button.grid(row=0, column=2, padx=10, pady="0 0")
 
         self.delete_tag_button = ttk.Button(self.tag_input_frame, text="Delete Tag", command=self.delete_tag)
         self.delete_tag_button.grid(row=1, column=2, padx=10, pady="0 0")
+        self.move_tag_button = ttk.Button(self.tag_input_frame, text="Move", command=self.edit_structure)
+        self.move_tag_button.grid(row=2, column=0, padx=5, pady="0 0")
         tree_checkbox_value = tk.IntVar()
         self.tree_checkbox = ttk.Checkbutton(self.tag_input_frame, text="Tree view",
                                              state="deselected", command=self.filter_tag_choice,
@@ -177,16 +179,26 @@ class ImageViewerApp:
 
         self.tag_choice.bind("<Return>", self.select_tag)
         self.tag_choice.bind("<Double-1>", self.select_tag)
-        self.tag_choice.bind("<Escape>", lambda x: (self.tag_search.focus_set(),
-                                                    self.tag_search.selection_range(0, 'end')))
-        self.tag_choice.bind("<Up>", lambda x: (self.tag_structure_entry.delete(0, 'end'),
-                                                self.tag_structure_entry.insert(0, self._get_current_tag_path())))
-        self.tag_choice.bind("<Down>", lambda x: (self.tag_structure_entry.delete(0, 'end'),
-                                                  self.tag_structure_entry.insert(0, self._get_current_tag_path())))
-        self.tag_search.bind("<Down>", lambda x: (self.tag_choice.focus_set(),
-                                                  self.tag_choice.selection_set(self.tag_choice.get_children('')[0])))
-        self.tag_search.bind("<Up>", lambda x: (self.tag_choice.focus_set(),
-                                                self.tag_choice.selection_set(self.tag_choice.get_children('')[-1])))
+        self.master.bind("<Escape>", lambda x: (self.tag_search.focus_set(),
+                                                self.tag_search.selection_range(0, 'end')))
+        self.tag_choice.bind("<<TreeviewSelect>>", lambda x: (self.tag_structure_entry.delete(0, 'end'),
+                                                              self.tag_structure_entry.insert(0,
+                                                                  self._get_current_tag_path()),
+                                                              ))
+
+        def _get_focus_to_choice_func(end=False):
+            def func(x=None):
+                self.tag_choice.focus_set()
+                item = self._get_recursive_index(-1 if end else 0)
+                self.tag_choice.selection_set(item)
+                self.tag_choice.focus(item)
+                self.tag_structure_entry.delete(0, 'end'),
+                self.tag_structure_entry.insert(0, self._get_current_tag_path())
+
+            return func
+
+        self.tag_search.bind("<Down>", _get_focus_to_choice_func())
+        self.tag_search.bind("<Up>", _get_focus_to_choice_func(end=True))
 
         # Controls
         self.control_frame = ttk.Frame(self.frame_master)
@@ -403,8 +415,19 @@ class ImageViewerApp:
                 return
             search_cursor += 1
 
+    def edit_structure(self):
+        if not self.tag_choice.selection():
+            return
+        format_structure = self.tag_structure_entry.get()
+        format_structure = '/' + format_structure.strip('/')
+        self.session_config["tags_structure"][self.tag_choice.selection()[0]] = format_structure
+        self.filter_tag_choice()
+        self.save_state()
+
     def add_tag(self, event=None):
         if self.session_config is None:
+            return
+        if not self.tag_search.get():
             return
         if not self.tag_search.get() in self.session_config["tags"]:
             self.session_config["tags"].append(self.tag_search.get())
@@ -437,7 +460,7 @@ class ImageViewerApp:
         selected = self.tag_choice.selection()
         if selected:
             tag = selected[0]
-            if self.tag_choice.get_children(tag): # if not leaf
+            if self.tag_choice.get_children(tag):  # if not leaf
                 return
             if selected in self._get_current_meta().get("tags", []):
                 return
@@ -469,12 +492,21 @@ class ImageViewerApp:
                 self.tag_choice.insert('', 'end', t, text=t, values=(score,))
 
     def _get_current_tag_path(self):
+        if not self.tag_choice.selection():
+            return ''
         selection = self.tag_choice.selection()[0]
         if not self.tag_choice.get_children(selection):
             path = self.tag_choice.parent(selection)
         else:
             path = selection
         return '/' + path.strip('/')
+
+    def _get_recursive_index(self, index=0):
+        item = ''
+        while True:
+            if not self.tag_choice.get_children(item):
+                return item
+            item = self.tag_choice.get_children(item)[index]
 
     def sort_tags(self):
         if self.tag_rec_mode.get() == "alphabetic":
