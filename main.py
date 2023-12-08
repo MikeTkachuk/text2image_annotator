@@ -35,11 +35,33 @@ def resize_pad_square(image_path, size):
     return square_image
 
 
-def sort_with_ranks(seq, ranks, reverse=True):
+def sort_with_ranks(seq, ranks, reverse=True, return_rank=True):
     assert len(seq) == len(ranks)
     cat = list(zip(seq, ranks))
     sorted_cat = sorted(cat, key=lambda x: x[1], reverse=reverse)
+    if return_rank:
+        return sorted_cat
     return [cat_el[0] for cat_el in sorted_cat]
+
+
+def put_node(tree: ttk.Treeview, path, node: str, score=None):
+    def path_to_node_id(p: Path):
+        if not len(p.parents):
+            return ''
+        else:
+            return p.as_posix()
+
+    path = Path(path)
+    parents = [path] + list(path.parents)
+    if len(parents) > 1:
+        for i in range(1, len(parents)):
+            parent_id = path_to_node_id(parents[-i])
+            node_id = path_to_node_id(parents[-i - 1])
+            if not tree.exists(node_id):
+                tree.insert(parent_id,
+                            "end", node_id,
+                            text=parents[-i - 1].name, open=True)
+    tree.insert(path_to_node_id(parents[0]), 'end', node, text=node, values=(score,))
 
 
 class ImageViewerApp:
@@ -82,7 +104,7 @@ class ImageViewerApp:
         self.inputs_frame.grid(row=0, column=1)
 
         self.text_entry = scrolledtext.ScrolledText(self.inputs_frame, width=30, height=8, )
-        self.text_entry.grid(row=0, column=0, pady="0 20", sticky="w")
+        self.text_entry.grid(row=0, column=0, pady="0 5", sticky="w")
 
         # # Tags preview
         self.tags_preview_frame = tk.Frame(self.inputs_frame, width=350)
@@ -94,44 +116,94 @@ class ImageViewerApp:
         # # CLIP settings
         self.emb_store = None
         self.tag_rec_frame = tk.Frame(self.inputs_frame)
-        self.tag_rec_frame.grid(row=2, column=1, pady="0 20", sticky="ws")
+        self.tag_rec_frame.grid(row=1, column=1, pady="0 20", sticky="ws")
         self.tag_rec_mode = tk.StringVar()
         self.tag_rec_mode.set("alphabetic")
         self.tag_rec_mode_menu = tk.OptionMenu(self.tag_rec_frame, self.tag_rec_mode, self.tag_rec_mode.get(),
                                                *("openai/clip-vit-base-patch32",
                                                  "openai/clip-vit-large-patch14", "popularity"))
-        self.tag_rec_mode_menu.grid(row=0, column=0, sticky="ws")
+        self.tag_rec_mode_menu.grid(row=1, column=0, sticky="ws")
 
         self.recompute_button = tk.Button(self.tag_rec_frame, text="Recompute",
-                                          command=self.filter_tag_choice)
-        self.recompute_button.grid(row=0, column=1, sticky="ws")
+                                          command=lambda: (self.recompute_recommendation(),
+                                                           self.filter_tag_choice))
+        self.recompute_button.grid(row=1, column=1, sticky="ws")
+
+        self.blank_entry = scrolledtext.ScrolledText(self.tag_rec_frame, height=16, width=30)
+        self.blank_entry.grid(row=0, column=0, columnspan=2)
 
         # # Tags selection
         self.tag_frame = tk.Frame(self.inputs_frame)
-        self.tag_frame.grid(row=2, column=0)
-        self.tag_search = ttk.Entry(self.tag_frame, width=40, )
+        self.tag_frame.grid(row=1, column=0)
+        self.tag_input_frame = tk.Frame(self.tag_frame)
+        self.tag_input_frame.grid(row=0, column=0, columnspan=1, sticky="w")
+        self.tag_search_label = tk.Label(self.tag_input_frame, text="Search:")
+        self.tag_search_label.grid(row=0, column=0, sticky="w")
+        self.tag_search = ttk.Entry(self.tag_input_frame, width=30)
         self.tag_search.focus_set()
-        self.tag_search.grid(row=0, column=0, pady="0 10", sticky="w")
+        self.tag_search.grid(row=0, column=1, pady="5 5", sticky="w")
         self.tag_search.bind("<KeyRelease>", self.filter_tag_choice)
         self.tag_search.bind("<Return>", self.add_tag)
         self.tag_search.bind("<Control-Return>", lambda x: (self.add_tag(),
-                                                            self.tag_choice.select_set(0), self.select_tag()))
+                                                            self.tag_choice.selection_set(self.tag_search.get()),
+                                                            self.select_tag()))
+        self.tag_structure_label = tk.Label(self.tag_input_frame, text="Structure:")
+        self.tag_structure_label.grid(row=1, column=0, sticky="w")
+        self.tag_structure_entry = ttk.Entry(self.tag_input_frame, width=30)
+        self.tag_structure_entry.grid(row=1, column=1, sticky="w")
+        self.tag_structure_entry.bind("<Return>", self.add_tag)
 
-        self.add_tag_button = ttk.Button(self.tag_frame, text="Add Tag", command=self.add_tag)
-        self.add_tag_button.grid(row=0, column=1, padx=10, pady="0 10")
+        self.add_tag_button = ttk.Button(self.tag_input_frame, text="Add Tag", command=self.add_tag)
+        self.add_tag_button.grid(row=0, column=2, padx=10, pady="0 0")
 
-        self.tag_scrollbar = tk.Scrollbar(self.tag_frame, orient="vertical")
-        self.tag_choice = tk.Listbox(self.tag_frame, width=40, height=25, yscrollcommand=self.tag_scrollbar.set)
+        self.delete_tag_button = ttk.Button(self.tag_input_frame, text="Delete Tag", command=self.delete_tag)
+        self.delete_tag_button.grid(row=1, column=2, padx=10, pady="0 0")
+        self.move_tag_button = ttk.Button(self.tag_input_frame, text="Move", command=self.edit_structure,
+                                          width=8)
+        self.move_tag_button.grid(row=2, column=0, pady="0 0")
+        tree_checkbox_value = tk.IntVar()
+        self.tree_checkbox = ttk.Checkbutton(self.tag_input_frame, text="Tree view",
+                                             state="deselected", command=self.filter_tag_choice,
+                                             variable=tree_checkbox_value)
+        self.tree_checkbox.variable = tree_checkbox_value
+        self.tree_checkbox.grid(row=2, column=2, padx="0 0")
+
+        self.tag_select_frame = tk.Frame(self.tag_frame)
+        self.tag_select_frame.grid(row=2, column=0, sticky="w")
+        self.tag_scrollbar = tk.Scrollbar(self.tag_select_frame, orient="vertical")
+        self.tag_choice = ttk.Treeview(self.tag_select_frame, height=15,
+                                       yscrollcommand=self.tag_scrollbar.set, selectmode="browse",
+                                       columns=("Rank",))
+        self.tag_choice.column("#0", width=210)
+        self.tag_choice.heading("#0", text="Name")
+        self.tag_choice.column("Rank", width=35)
+        self.tag_choice.heading("Rank", text="Rank")
         self.tag_scrollbar.config(command=self.tag_choice.yview)
-        self.tag_scrollbar.grid(row=1, column=1, sticky="nsw")
-        self.tag_choice.grid(row=1, column=0, sticky="w")
+        self.tag_scrollbar.grid(row=0, column=1, sticky="nsw")
+        self.tag_choice.grid(row=0, column=0, sticky="w")
 
         self.tag_choice.bind("<Return>", self.select_tag)
         self.tag_choice.bind("<Double-1>", self.select_tag)
-        self.tag_choice.bind("<Escape>", lambda x: (self.tag_search.focus_set(),
-                                                    self.tag_search.selection_range(0, 'end')))
-        self.tag_search.bind("<Down>", lambda x: (self.tag_choice.focus_set(), self.tag_choice.selection_set(0)))
-        self.tag_search.bind("<Up>", lambda x: (self.tag_choice.focus_set(), self.tag_choice.selection_set("end")))
+        self.master.bind("<Escape>", lambda x: (self.tag_search.focus_set(),
+                                                self.tag_search.selection_range(0, 'end')))
+        self.tag_choice.bind("<<TreeviewSelect>>", lambda x: (self.tag_structure_entry.delete(0, 'end'),
+                                                              self.tag_structure_entry.insert(0,
+                                                                                              self._get_current_tag_path()),
+                                                              ))
+
+        def _get_focus_to_choice_func(end=False):
+            def func(x=None):
+                self.tag_choice.focus_set()
+                item = self._get_recursive_index(-1 if end else 0)
+                self.tag_choice.selection_set(item)
+                self.tag_choice.focus(item)
+                self.tag_structure_entry.delete(0, 'end'),
+                self.tag_structure_entry.insert(0, self._get_current_tag_path())
+
+            return func
+
+        self.tag_search.bind("<Down>", _get_focus_to_choice_func())
+        self.tag_search.bind("<Up>", _get_focus_to_choice_func(end=True))
 
         # Controls
         self.control_frame = ttk.Frame(self.frame_master)
@@ -153,7 +225,7 @@ class ImageViewerApp:
 
         preview_checkbox_value = tk.IntVar()
         self.preview_checkbox = ttk.Checkbutton(self.control_frame, text="Preview subfolder",
-                                                state="deselected", command=self.preview_routine,
+                                                state="selected", command=self.preview_routine,
                                                 variable=preview_checkbox_value)
         self.preview_checkbox.variable = preview_checkbox_value
         self.preview_checkbox.grid(row=0, column=4, padx="20 0")
@@ -165,7 +237,7 @@ class ImageViewerApp:
         self.tags_render_checkbox.variable = tags_render_value
         self.tags_render_checkbox.grid(row=0, column=5, padx="20 0")
 
-        self.progress_info = tk.Label(self.control_frame, text="")
+        self.progress_info = tk.Label(self.tag_select_frame, text="")
         self.progress_info.grid(row=1, column=0, sticky="w")
 
         self.master.bind("<Control-Right>", lambda x: self.show_next_image())
@@ -194,6 +266,7 @@ class ImageViewerApp:
                 "name": session_name,
                 "total_files": len(self.image_paths),
                 "tags": [],
+                "tags_structure": {},
                 "data": {}
             }
             self.session_config = new_session_config
@@ -347,14 +420,38 @@ class ImageViewerApp:
                 return
             search_cursor += 1
 
+    def edit_structure(self):
+        if not self.tag_choice.selection():
+            return
+        format_structure = self.tag_structure_entry.get()
+        format_structure = '/' + format_structure.strip('/')
+        self.session_config["tags_structure"][self.tag_choice.selection()[0]] = format_structure
+        self.filter_tag_choice()
+        self.save_state()
+
     def add_tag(self, event=None):
         if self.session_config is None:
             return
-        if self.tag_search.get() in self.session_config["tags"]:
+        if not self.tag_search.get():
             return
-        self.session_config["tags"].append(self.tag_search.get())
+        if not self.tag_search.get() in self.session_config["tags"]:
+            self.session_config["tags"].append(self.tag_search.get())
+        format_structure = self.tag_structure_entry.get()
+        format_structure = '/' + format_structure.strip('/')
+        self.session_config["tags_structure"][self.tag_search.get()] = format_structure
         self.filter_tag_choice()
         self.save_state()
+
+    def delete_tag(self):
+        tag = self.tag_choice.selection()
+        if not tag:
+            return
+        tag = tag[0]
+        if not self.tag_choice.get_children(tag):
+            self.session_config["tags"].remove(tag)
+            self.session_config["tags_structure"].pop(tag)
+            self.filter_tag_choice()
+            self.save_state()
 
     def _helper_remove_tag(self, tag_widget):
         tag_id = self.tags_list.index(tag_widget)
@@ -368,31 +465,63 @@ class ImageViewerApp:
         return lambda: self._helper_remove_tag(tag_widget)
 
     def select_tag(self, event=None):
-        selected_ids = self.tag_choice.curselection()
-        if selected_ids:
-            selected_value = self.tag_choice.get(selected_ids)
-            if selected_value in self._get_current_meta().get("tags", []):
+        selected = self.tag_choice.selection()
+        if selected:
+            tag = selected[0]
+            if self.tag_choice.get_children(tag):  # if not leaf
                 return
-            self._add_tag_widget(selected_value)
+            if selected in self._get_current_meta().get("tags", []):
+                return
+            self._add_tag_widget(tag)
             self.make_record()
 
     def filter_tag_choice(self, event=None):
         if self.session_config is None:
             return
-
         search_key = self.tag_search.get()
         tags_pool = self.sort_tags()
-        filtered = [t for t in tags_pool if search_key in t]
-        self.tag_choice.delete(0, 'end')
-        for t in filtered:
-            self.tag_choice.insert('end', t)
+
+        filtered = []
+        scores = []
+        for t in tags_pool:
+            score = None
+            if isinstance(t, tuple):
+                t, score = t
+            if search_key in t or search_key in self.session_config["tags_structure"].get(t, '/'):
+                filtered.append(t)
+                scores.append(score)
+        for ch in self.tag_choice.get_children():
+            self.tag_choice.delete(ch)
+        for t, score in zip(filtered, scores):
+            if self.tree_checkbox.variable.get():
+                hierarchy = Path(self.session_config["tags_structure"].get(t, '/'))
+                put_node(self.tag_choice, hierarchy, t, score=score)
+            else:
+                self.tag_choice.insert('', 'end', t, text=t, values=(score,))
+
+    def _get_current_tag_path(self):
+        if not self.tag_choice.selection():
+            return ''
+        selection = self.tag_choice.selection()[0]
+        if not self.tag_choice.get_children(selection):
+            path = self.tag_choice.parent(selection)
+        else:
+            path = selection
+        return '/' + path.strip('/')
+
+    def _get_recursive_index(self, index=0):
+        item = ''
+        while True:
+            if not self.tag_choice.get_children(item):
+                return item
+            item = self.tag_choice.get_children(item)[index]
 
     def sort_tags(self):
         if self.tag_rec_mode.get() == "alphabetic":
             return sorted(self.session_config["tags"])
         if self.tag_rec_mode.get() == "popularity":
             raise NotImplementedError
-        self.recompute_recommendation()
+
         ranks = self.emb_store.get_tag_ranks(self.session_config["tags"],
                                              self.image_paths[self.current_index],
                                              self.session_config["target"])
