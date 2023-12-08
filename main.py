@@ -122,11 +122,15 @@ class ImageViewerApp:
         self.tag_rec_mode_menu = tk.OptionMenu(self.tag_rec_frame, self.tag_rec_mode, self.tag_rec_mode.get(),
                                                *("openai/clip-vit-base-patch32",
                                                  "openai/clip-vit-large-patch14", "popularity"))
-        self.tag_rec_mode_menu.grid(row=0, column=0, sticky="ws")
+        self.tag_rec_mode_menu.grid(row=1, column=0, sticky="ws")
 
         self.recompute_button = tk.Button(self.tag_rec_frame, text="Recompute",
-                                          command=self.filter_tag_choice)
-        self.recompute_button.grid(row=0, column=1, sticky="ws")
+                                          command=lambda: (self.recompute_recommendation(),
+                                                           self.filter_tag_choice))
+        self.recompute_button.grid(row=1, column=1, sticky="ws")
+
+        self.blank_entry = scrolledtext.ScrolledText(self.tag_rec_frame, height=16, width=30)
+        self.blank_entry.grid(row=0, column=0, columnspan=2)
 
         # # Tags selection
         self.tag_frame = tk.Frame(self.inputs_frame)
@@ -154,8 +158,9 @@ class ImageViewerApp:
 
         self.delete_tag_button = ttk.Button(self.tag_input_frame, text="Delete Tag", command=self.delete_tag)
         self.delete_tag_button.grid(row=1, column=2, padx=10, pady="0 0")
-        self.move_tag_button = ttk.Button(self.tag_input_frame, text="Move", command=self.edit_structure)
-        self.move_tag_button.grid(row=2, column=0, padx=5, pady="0 0")
+        self.move_tag_button = ttk.Button(self.tag_input_frame, text="Move", command=self.edit_structure,
+                                          width=8)
+        self.move_tag_button.grid(row=2, column=0, pady="0 0")
         tree_checkbox_value = tk.IntVar()
         self.tree_checkbox = ttk.Checkbutton(self.tag_input_frame, text="Tree view",
                                              state="deselected", command=self.filter_tag_choice,
@@ -183,7 +188,7 @@ class ImageViewerApp:
                                                 self.tag_search.selection_range(0, 'end')))
         self.tag_choice.bind("<<TreeviewSelect>>", lambda x: (self.tag_structure_entry.delete(0, 'end'),
                                                               self.tag_structure_entry.insert(0,
-                                                                  self._get_current_tag_path()),
+                                                                                              self._get_current_tag_path()),
                                                               ))
 
         def _get_focus_to_choice_func(end=False):
@@ -232,7 +237,7 @@ class ImageViewerApp:
         self.tags_render_checkbox.variable = tags_render_value
         self.tags_render_checkbox.grid(row=0, column=5, padx="20 0")
 
-        self.progress_info = tk.Label(self.control_frame, text="")
+        self.progress_info = tk.Label(self.tag_select_frame, text="")
         self.progress_info.grid(row=1, column=0, sticky="w")
 
         self.master.bind("<Control-Right>", lambda x: self.show_next_image())
@@ -513,7 +518,7 @@ class ImageViewerApp:
             return sorted(self.session_config["tags"])
         if self.tag_rec_mode.get() == "popularity":
             raise NotImplementedError
-        self.recompute_recommendation()
+
         ranks = self.emb_store.get_tag_ranks(self.session_config["tags"],
                                              self.image_paths[self.current_index],
                                              self.session_config["target"])
