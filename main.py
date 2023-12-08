@@ -443,7 +443,10 @@ class ImageViewerApp:
         self.save_state()
 
     def delete_tag(self):
-        tag = self.tag_choice.selection()[0]
+        tag = self.tag_choice.selection()
+        if not tag:
+            return
+        tag = tag[0]
         if not self.tag_choice.get_children(tag):
             self.session_config["tags"].remove(tag)
             self.session_config["tags_structure"].pop(tag)
@@ -484,7 +487,7 @@ class ImageViewerApp:
             score = None
             if isinstance(t, tuple):
                 t, score = t
-            if search_key in t:
+            if search_key in t or search_key in self.session_config["tags_structure"].get(t, '/'):
                 filtered.append(t)
                 scores.append(score)
         for ch in self.tag_choice.get_children():
