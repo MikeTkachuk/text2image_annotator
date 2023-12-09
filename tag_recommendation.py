@@ -1,9 +1,7 @@
-import time
 from pathlib import Path
 from typing import Union, List
 
 from PIL import Image
-import numpy as np
 import torch
 from transformers import CLIPModel, CLIPProcessor
 
