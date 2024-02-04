@@ -3,17 +3,26 @@ import json
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk, scrolledtext
-from PIL import Image, ImageTk
+
+import PIL
+from PIL import Image, ImageTk, ImageDraw
 from tqdm import tqdm
 
 from tag_recommendation import EmbeddingStore
 
 IMG_SIZE = 512
 THUMBNAIL_SIZE = 64
+WORK_DIR = "./output"
 
 
 def resize_pad_square(image_path, size):
-    image = Image.open(image_path)
+    try:
+        image = Image.open(image_path)
+    except PIL.UnidentifiedImageError:
+        square_image = Image.new("RGB", (size, size), (255, 255, 230))
+        dr = ImageDraw.Draw(square_image)
+        dr.text((size/2, size/2), text="Invalid image", align="center", fill=(200, 20, 10))
+        return square_image
     width, height = image.size
 
     # Determine the aspect ratio
@@ -66,12 +75,12 @@ def put_node(tree: ttk.Treeview, path, node: str, score=None):
 
 class ImageViewerApp:
     def __init__(self, master):
-        self.session_config_path = Path("sessions.json")
-        if not self.session_config_path.exists():
-            self.session_config_path.touch()
+        self.sessions_config_path = Path(WORK_DIR) / "sessions.json"
+        if not self.sessions_config_path.exists():
+            self.sessions_config_path.touch()
             self.full_session_config = {}
         else:
-            with open(self.session_config_path) as session_config_file:
+            with open(self.sessions_config_path) as session_config_file:
                 self.full_session_config = json.load(session_config_file)
         self.session_config = None
         self.image_paths = []  # List to store image paths
@@ -270,7 +279,7 @@ class ImageViewerApp:
                 "data": {}
             }
             self.session_config = new_session_config
-            self.full_session_config[str(session_dir)] = f"{session_name}.json"
+            self.full_session_config[str(session_dir)] = Path(WORK_DIR) / f"{session_name}.json"
         else:
             with open(session_file_name) as session_file:
                 self.session_config = json.load(session_file)
@@ -280,8 +289,8 @@ class ImageViewerApp:
         self.save_state()
 
     def save_state(self):
-        with open(self.session_config_path, "w") as session_config_file:
-            json.dump(self.full_session_config, session_config_file)
+        with open(self.sessions_config_path, "w") as sessions_config_file:
+            json.dump(self.full_session_config, sessions_config_file)
         with open(self.full_session_config[self.session_config["target"]], "w") as session_data:
             json.dump(self.session_config, session_data)
 
@@ -373,6 +382,7 @@ class ImageViewerApp:
         if self.image_paths:
             image_path = self.image_paths[self.current_index]
             square_image = resize_pad_square(image_path, IMG_SIZE)
+
             photo = ImageTk.PhotoImage(square_image)
             self.image_label.config(image=photo)
             self.image_label.image = photo
@@ -470,7 +480,7 @@ class ImageViewerApp:
             tag = selected[0]
             if self.tag_choice.get_children(tag):  # if not leaf
                 return
-            if selected in self._get_current_meta().get("tags", []):
+            if tag in self._get_current_meta().get("tags", []):
                 return
             self._add_tag_widget(tag)
             self.make_record()
@@ -535,7 +545,8 @@ class ImageViewerApp:
 
         if self.emb_store is None:
             emb_store_path = "." + Path(self.session_config["target"]).name
-            self.emb_store = EmbeddingStore(emb_store_path, model_name=self.tag_rec_mode.get())
+            self.emb_store = EmbeddingStore(Path(WORK_DIR) / emb_store_path,
+                                            model_name=self.tag_rec_mode.get())
 
         for img_path in tqdm(self.session_config["data"], desc="Loading image embeddings"):
             self.emb_store.get_image_embedding(img_path, self.session_config["target"])
