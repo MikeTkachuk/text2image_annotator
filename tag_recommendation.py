@@ -40,7 +40,7 @@ def optimize_metric_func():
 class EmbeddingStore:
     def __init__(self, store_path, model_name=MODEL_NAME):
         store_path = Path(store_path)
-        self.store_path = store_path
+        self.store_path = store_path / Path(model_name).name
         if not self.store_path.exists():
             self.store_path.mkdir(parents=True)
             with open(self.store_path / "embedder_spec.txt", "w") as spec_file:
@@ -70,9 +70,12 @@ class EmbeddingStore:
         if abs_emb_path.exists():
             embedding = torch.load(abs_emb_path)
         else:
-            embedding = self.embedder(Image.open(abs_path))
-            abs_emb_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(embedding, abs_emb_path)
+            try:
+                embedding = self.embedder(Image.open(abs_path))
+                abs_emb_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(embedding, abs_emb_path)
+            except:
+                embedding = None
         return embedding
 
     @torch.no_grad()
@@ -92,6 +95,8 @@ class EmbeddingStore:
 
     @torch.no_grad()
     def get_tag_ranks(self, tag_list, image_abs_path, folder_path):
+        if not tag_list:
+            return []
         image_embedding = self.get_image_embedding(image_abs_path, folder_path)
         unprocessed_tags = [t for t in tag_list if t not in self.tag_embeddings]
         if unprocessed_tags:
@@ -99,6 +104,6 @@ class EmbeddingStore:
         tag_embedding = torch.cat([self.tag_embeddings[t].reshape(1, -1) for t in tag_list], dim=0)
         cosines = image_embedding @ tag_embedding.T / (image_embedding.norm() * tag_embedding.norm(dim=1))
 
-        return cosines.squeeze().cpu().numpy().tolist()
+        return cosines.flatten().cpu().numpy().tolist()
 
     # TODO connect session config and emb store to do finetuning

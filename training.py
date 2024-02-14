@@ -7,6 +7,9 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import f1_score
+
 import torch
 from torch.utils.data import Dataset as TorchDataset, DataLoader
 from torchvision.transforms import v2
@@ -109,6 +112,38 @@ def collate_fn(samples: list):
     return collated, target, [s[1][0] for s in samples]
 
 
+def get_dataloaders(data_config, n_test_samples, batch_size):
+    train_ids = list(set([Path(s).parent.name for s in data_config["data"].keys()]))
+    test_ids = set(train_ids[:n_test_samples])
+    train_test_ids = set(train_ids[n_test_samples:n_test_samples + 30])
+    train_ids = set(train_ids[n_test_samples:])
+
+    train_dataset = Dataset(data_config, subsample=train_ids)
+
+    test_dataset = Dataset(data_config, subsample=test_ids, train=False)
+    train_test_dataset = Dataset(data_config, subsample=train_test_ids, train=False)
+    train_dataloader = DataLoader(train_dataset,
+                                  batch_size=batch_size,
+                                  num_workers=1,
+                                  collate_fn=collate_fn,
+                                  pin_memory=True,
+                                  prefetch_factor=1,
+                                  shuffle=True,
+                                  )
+
+    train_test_dataloader = DataLoader(train_test_dataset,
+                                       batch_size=1,
+                                       num_workers=0,
+                                       collate_fn=collate_fn,
+                                       )
+    test_dataloader = DataLoader(test_dataset,
+                                 batch_size=1,
+                                 num_workers=0,
+                                 collate_fn=collate_fn,
+                                 )
+    return train_dataloader, train_test_dataloader, test_dataloader
+
+
 def train(model_name=MODEL_NAME):
     config = OmegaConf.create(
         {"n_epochs": 50,
@@ -127,35 +162,11 @@ def train(model_name=MODEL_NAME):
 
     data_config = json.load(open(r"./output/tweets_data.json"))
     clip_model: CLIPModel = CLIPModel.from_pretrained(model_name, device_map=device)
-    train_ids = list(set([Path(s).parent.name for s in data_config["data"].keys()]))
-    test_ids = set(train_ids[:config.test_samples])
-    train_test_ids = set(train_ids[config.test_samples:config.test_samples+30])
-    train_ids = set(train_ids[config.test_samples:])
-
-    train_dataset = Dataset(data_config, subsample=train_ids)
-    steps_per_epoch = len(train_dataset) // config.batch_size // config.accumulate_steps
-
-    test_dataset = Dataset(data_config, subsample=test_ids, train=False)
-    train_test_dataset = Dataset(data_config, subsample=train_test_ids, train=False)
-    train_dataloader = DataLoader(train_dataset,
-                                  batch_size=config.batch_size,
-                                  num_workers=1,
-                                  collate_fn=collate_fn,
-                                  pin_memory=True,
-                                  prefetch_factor=1,
-                                  shuffle=True,
-                                  )
-
-    train_test_dataloader = DataLoader(train_test_dataset,
-                                 batch_size=1,
-                                 num_workers=0,
-                                 collate_fn=collate_fn,
-                                 )
-    test_dataloader = DataLoader(test_dataset,
-                                 batch_size=1,
-                                 num_workers=0,
-                                 collate_fn=collate_fn,
-                                 )
+    train_dataloader, train_test_dataloader, test_dataloader = get_dataloaders(data_config,
+                                                                               config.test_samples,
+                                                                               config.batch_size
+                                                                               )
+    steps_per_epoch = len(train_dataloader.dataset) // config.batch_size // config.accumulate_steps
     eval_results = evaluate(clip_model, data_config, [train_test_dataloader, test_dataloader])
     print("Before training: ", eval_results)
     wandb.log({"f1_train": eval_results[0]["score"], "f1": eval_results[1]["score"]})
@@ -166,6 +177,7 @@ def train(model_name=MODEL_NAME):
                                                        pct_start=0.2
                                                        )
     for epoch in range(config.n_epochs):
+        clip_model.train()
         for i, (data, target, _) in tqdm.tqdm(enumerate(train_dataloader), desc=f"Epoch {epoch}: "):
             if i > steps_per_epoch * config.accumulate_steps:
                 break
@@ -181,6 +193,8 @@ def train(model_name=MODEL_NAME):
             if (i + 1) % config.accumulate_steps == 0:
                 optim.step()
                 lr_scheduler.step()
+        # evaluate
+        clip_model.eval()
         eval_results = evaluate(clip_model, data_config, [train_test_dataloader, test_dataloader])
         wandb.log({"f1_train": eval_results[0]["score"], "f1": eval_results[1]["score"]})
 
@@ -253,5 +267,87 @@ def tag_score(pred, true, mode="f1"):
         return 2 * p * r / (p + r)
 
 
+@torch.no_grad()
+def embedding_tree_train(embedder: CLIPModel, data_aug_passes=4):
+    data_config = json.load(open(r"./output/tweets_data.json"))
+    train_dl, _, test_dl = get_dataloaders(data_config, 40, 16)
+    train_emb, test_emb = [], []
+    label_train, label_test = [], []
+    for i in range(data_aug_passes):
+        for data, _, label in tqdm.tqdm(train_dl):
+            data.to(device)
+            train_emb.extend(embedder(**data, return_dict=True)["image_embeds"].cpu().numpy().tolist())
+            label_train.extend(label)
+
+    for data, _, label in tqdm.tqdm(test_dl):
+        data.to(device)
+        test_emb.append(embedder(**data, return_dict=True)["image_embeds"][0].cpu().numpy())
+        label_test.append(label[0])
+
+    X_train = np.stack(train_emb, axis=0)
+    X_test = np.stack(test_emb, axis=0)
+    y_full = {}
+    results = {}
+    for tag in data_config["tags"]:
+        y_train = np.array([tag in l for l in label_train])
+        y_test = np.array([tag in l for l in label_test])
+        y_full[tag] = {
+            "y_train": y_train,
+            "y_test": y_test
+        }
+
+        model = DecisionTreeClassifier()
+        model.fit(X_train, y_train)
+        f1_ = f1_score(y_test, model.predict(X_test))
+        results[tag] = {
+            "model": model,
+            "f1_score": f1_,
+            "imbalance": [sum(y_train)/len(y_train), sum(y_test)/len(y_test)]
+        }
+
+    return results
+
+
 if __name__ == "__main__":
-    train()
+    clip_model: CLIPModel = CLIPModel.from_pretrained(MODEL_NAME, device_map=device)
+    clip_model.eval()
+    for p in clip_model.parameters():
+        p.requires_grad = False
+
+    img_src = PROCESSOR(images=Image.open(r"C:\Users\Michael\Downloads\tweets_data\623707697020403712\0.jpg"),
+                        return_tensors="pt")
+    img_dst: BatchFeature = PROCESSOR(images=Image.open(r"C:\Users\Michael\Downloads\tweets_data\753599157177167872\0.jpg"),
+                                      return_tensors="pt")
+    dst_emb = clip_model.get_image_features(img_dst["pixel_values"].to(device))
+
+    w = 0.3
+    src_tensor = (w * img_src["pixel_values"] + (1 - w) * img_dst["pixel_values"]).to(device)
+    src_tensor.requires_grad = True
+    adm = torch.optim.SGD([src_tensor], lr=0.00003, momentum=0.0)
+    lr = 3
+    for i in range(10000):
+        emb = clip_model.get_image_features(src_tensor)
+        loss = torch.abs(emb - dst_emb).mean()
+        loss.backward()
+        print(loss.item())
+        adm.step()
+        if i % 200 == 0:
+            viz = src_tensor.detach().cpu().numpy()[0].transpose(1,2,0)
+            viz = viz * 0.43 + 0.5
+            plt.imshow(viz)
+            plt.show()
+    # with torch.no_grad():
+        #     src_tensor -= src_tensor.grad * lr
+        #     src_tensor.grad = None
+        # if i % 200 == 0:
+        #     viz = src_tensor.detach().cpu().numpy()[0].transpose(1,2,0)
+        #     inp = input()
+        #     if inp:
+        #         lr = float(inp)
+    # res = embedding_tree_train(clip_model)
+    # bar = [(n,res[n]["f1_score"]) for n in res if res[n]["f1_score"] > 0]
+    # bar = sorted(bar, key=lambda x: x[1])
+    # bar_names, bar_values = [i for i in zip(*bar)]
+    # plt.bar(x=bar_names, height=bar_values)
+    # plt.xticks(rotation=30, ha='right')
+    # plt.show()
