@@ -39,8 +39,8 @@ def optimize_metric_func():
 
 class EmbeddingStore:
     def __init__(self, store_path, model_name=MODEL_NAME):
-        store_path = Path(store_path)
-        self.store_path = store_path / Path(model_name).name
+        self.model_name = model_name
+        self.store_path = Path(store_path) / self.model_name
         if not self.store_path.exists():
             self.store_path.mkdir(parents=True)
             with open(self.store_path / "embedder_spec.txt", "w") as spec_file:

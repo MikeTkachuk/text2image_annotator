@@ -2,23 +2,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main_frame import App
-
-import json
+from views.view_base import ViewBase
 
 import tkinter as tk
-from pathlib import Path
-from tkinter import filedialog, ttk, scrolledtext
-
-import PIL
-from PIL import Image, ImageTk, ImageDraw
-from tqdm import tqdm
-
-IMG_SIZE = 512
-THUMBNAIL_SIZE = 64
-WORK_DIR = "./output"
+from tkinter import ttk
 
 
-class ClusteringFrame:
+class TrainingFrame(ViewBase):
     def __init__(self, parent: App):
         self.parent = parent
         self._main_setup()
@@ -31,7 +21,7 @@ class ClusteringFrame:
         self.parent.render()
 
     def _main_setup(self):
-        self.parent.master.title("Clustering")
+        self.parent.master.title("Training")
 
         self.frame_master = ttk.Frame(master=self.parent.master, padding=4)
         self.frame_master.grid(row=0, column=0)

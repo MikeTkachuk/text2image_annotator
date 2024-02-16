@@ -1,7 +1,6 @@
 import tkinter as tk
 
-from main_frame import App
-from clustering_frame import ClusteringFrame
+from core_app import App
 
 
 if __name__ == "__main__":
