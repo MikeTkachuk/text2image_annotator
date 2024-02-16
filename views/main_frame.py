@@ -1,6 +1,6 @@
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk, scrolledtext
+from tkinter import simpledialog, ttk, scrolledtext
 
 import PIL
 from PIL import Image, ImageTk, ImageDraw
@@ -9,7 +9,6 @@ from views.view_base import ViewBase, Frame
 from config import *
 
 
-# TODO toolbar goto, view navigation... construct the menu in the main frame, draw it everywhere
 def resize_pad_square(image_path, size):
     try:
         image = Image.open(image_path)
@@ -67,19 +66,20 @@ class MainFrame(ViewBase):
         self.tag_to_row = {}
         self.tags_list = []
 
+        self.tree_checkbox_var = tk.IntVar(value=1)
+        self.preview_checkbox_var = tk.IntVar()
+        self.tags_render_checkbox_var = tk.IntVar()
+
     def _main_setup(self):
         self.master.title("Image Viewer")
+
+        # Toolbar
+        self.toolbar = self.get_navigation_menu(self.master)
 
         self.frame_master = Frame(master=self.master, padx=4, pady=4, name="frame_master")
         self.frame_master.grid(row=0, column=0)
         self.top_left_frame = Frame(master=self.frame_master, name="top_left_frame")
         self.top_left_frame.grid(row=0, column=0, sticky="wn")
-
-        # Toolbar
-        self.toolbar_frame = Frame(master=self.top_left_frame, name="toolbar_frame", pack=True)
-        self.toolbar_frame.grid(row=0, column=0, sticky="wn")
-        self.toolbar = self.get_navigation_menu(self.toolbar_frame)
-        self.toolbar.pack()
 
         # Media
         self.media_frame = Frame(master=self.top_left_frame, name="media_frame")
@@ -154,12 +154,6 @@ class MainFrame(ViewBase):
         self.move_tag_button = ttk.Button(self.tag_input_frame, text="Move", command=self.edit_structure,
                                           width=8)
         self.move_tag_button.grid(row=2, column=0, pady="0 0")
-        tree_checkbox_value = tk.IntVar()
-        self.tree_checkbox = ttk.Checkbutton(self.tag_input_frame, text="Tree view",
-                                             state="deselected", command=self.filter_tag_choice,
-                                             variable=tree_checkbox_value)
-        self.tree_checkbox.variable = tree_checkbox_value
-        self.tree_checkbox.grid(row=2, column=2, padx="0 0")
 
         self.tag_select_frame = Frame(self.tag_frame, name="tag_select_frame")
         self.tag_select_frame.grid(row=2, column=0, sticky="w")
@@ -202,10 +196,6 @@ class MainFrame(ViewBase):
         self.control_frame = Frame(self.frame_master, name="control_frame")
         self.control_frame.grid(row=1, column=0, sticky="w")
 
-        self.select_folder_button = ttk.Button(self.control_frame, text="Select folder",
-                                               command=self.select_folder)
-        self.select_folder_button.grid(row=0, column=0, padx="0 30", sticky="w")
-
         self.prev_button = ttk.Button(self.control_frame, text="Previous", command=self.show_previous_image)
         self.prev_button.grid(row=0, column=1)
 
@@ -216,29 +206,8 @@ class MainFrame(ViewBase):
                                                 command=self.show_next_unlabeled_image)
         self.next_unlabeled_button.grid(row=0, column=3)
 
-        preview_checkbox_value = tk.IntVar()
-        self.preview_checkbox = ttk.Checkbutton(self.control_frame, text="Preview subfolder",
-                                                state="selected", command=self.preview_routine,
-                                                variable=preview_checkbox_value)
-        self.preview_checkbox.variable = preview_checkbox_value
-        self.preview_checkbox.grid(row=0, column=4, padx="20 0")
-
-        tags_render_value = tk.IntVar()
-        self.tags_render_checkbox = ttk.Checkbutton(self.control_frame, text="Edit tags",
-                                                    state="deselected", command=self.show_image_metadata,
-                                                    variable=tags_render_value)
-        self.tags_render_checkbox.variable = tags_render_value
-        self.tags_render_checkbox.grid(row=0, column=5, padx="20 0")
-
         self.progress_info = tk.Label(self.tag_select_frame, text="")
         self.progress_info.grid(row=1, column=0, sticky="w")
-
-        # Tab navigation
-        # self.navigation_frame = Frame(self.frame_master, name="navigation_frame", pack=True)
-        # self.navigation_frame.grid(row=1, column=1)
-        # self.training_button = tk.Button(self.navigation_frame, text="Training",
-        #                                  command=self.switch_to_clustering)
-        # self.training_button.pack()
 
         # Other
         self.master.bind("<Control-Right>", lambda x: self.show_next_image())
@@ -273,10 +242,19 @@ class MainFrame(ViewBase):
         self.show_current_image()
         self.filter_tag_choice()
 
-    def select_folder(self):
-        image_dir = Path(filedialog.askdirectory(title="Select Folder"))
-        self.app.select_folder(image_dir)
-        self.show_current_image()
+    def get_tools(self, master):
+        tools = tk.Menu(master, tearoff=0)
+        tools.add_checkbutton(label="Tag tree view", variable=self.tree_checkbox_var,
+                              command=self.filter_tag_choice)
+        tools.add_checkbutton(label="Preview folder", variable=self.preview_checkbox_var,
+                              command=self.preview_routine)
+        tools.add_checkbutton(label="Edit tags", variable=self.tags_render_checkbox_var,
+                              command=self.show_image_metadata)
+        tools.add_separator()
+
+        tools.add_command(label="Go to", command=self.go_to_image)
+
+        return tools
 
     def make_record(self):
         prompt = self.text_entry.get("1.0", "end").replace("\n", "")
@@ -287,7 +265,7 @@ class MainFrame(ViewBase):
         self.app.make_record(prompt, tags)
 
     def _add_tag_widget(self, tag_text):
-        if not self.tags_render_checkbox.variable.get():
+        if not self.tags_render_checkbox_var.get():
             tags_label = list(self.tags_preview_frame.children.values())[0]
             tags_label.config(text=tags_label.cget("text") + tag_text + "; ")
             self.tags_list.append(tk.Button(text=tag_text))
@@ -340,7 +318,7 @@ class MainFrame(ViewBase):
             row.destroy()
         self.tags_list = []
         self.tag_to_row = {}
-        should_render = self.tags_render_checkbox.variable.get()
+        should_render = self.tags_render_checkbox_var.get()
         if not should_render:
             tags_label = tk.Label(master=self.tags_preview_frame, text="", font=("Arial", 12),
                                   wraplength=self.tags_preview_frame.cget("width"))
@@ -358,7 +336,7 @@ class MainFrame(ViewBase):
             self.show_image_metadata()
 
     def preview_routine(self):
-        if self.preview_checkbox.variable.get():
+        if self.preview_checkbox_var.get():
             if not self.app.is_initialized:
                 return
             subdir = Path(self.app.get_current_image_path()).parent
@@ -386,6 +364,12 @@ class MainFrame(ViewBase):
     def show_next_unlabeled_image(self):
         self.make_record()
         self.app.go_to_next_unlabeled_image()
+        self.show_current_image()
+
+    def go_to_image(self):
+        self.make_record()
+        id_ = simpledialog.askinteger(title="Go to", prompt="Sample id: ")
+        self.app.go_to_image(id_)
         self.show_current_image()
 
     def edit_structure(self):
@@ -442,7 +426,7 @@ class MainFrame(ViewBase):
         for ch in self.tag_choice.get_children():
             self.tag_choice.delete(ch)
         for t, path, score in zip(tags, paths, scores):
-            if self.tree_checkbox.variable.get():
+            if self.tree_checkbox_var.get():
                 hierarchy = Path(path)
                 put_node(self.tag_choice, hierarchy, t, score=score)
             else:

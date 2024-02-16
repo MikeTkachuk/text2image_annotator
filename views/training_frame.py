@@ -1,31 +1,33 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from main_frame import App
-from views.view_base import ViewBase
+    from core_app import App
 
 import tkinter as tk
-from tkinter import ttk
+
+from views.view_base import ViewBase, Frame
+from config import *
 
 
 class TrainingFrame(ViewBase):
-    def __init__(self, parent: App):
-        self.parent = parent
-        self._main_setup()
+    def __init__(self, app: App):
+        self.app = app
+        self.master = self.app.master
 
     def render(self):
         self._main_setup()
 
-    def switch_to_main(self):
-        self.frame_master.destroy()
-        self.parent.render()
+    def get_tools(self, master):
+        tools = tk.Menu(master, tearoff=0)
+        return tools
 
     def _main_setup(self):
-        self.parent.master.title("Training")
+        self.app.master.title("Training")
 
-        self.frame_master = ttk.Frame(master=self.parent.master, padding=4)
+        self.frame_master = Frame(master=self.master, padx=4, pady=4, name="frame_master")
         self.frame_master.grid(row=0, column=0)
+        self.top_left_frame = Frame(master=self.frame_master, name="top_left_frame")
+        self.top_left_frame.grid(row=0, column=0, sticky="wn")
 
-        self.main_view_button = tk.Button(self.frame_master, text="Back",
-                                          command=self.switch_to_main)
-        self.main_view_button.grid(row=2, column=0, sticky="ws")
+        # Toolbar
+        self.toolbar = self.get_navigation_menu(self.master)

@@ -1,9 +1,12 @@
 import json
 from collections import namedtuple
-from typing import Literal
+from functools import partial
 
 from pathlib import Path
 from tqdm import tqdm
+
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 from tag_recommendation import EmbeddingStore
 from views import *
@@ -48,12 +51,35 @@ class App:
             "clustering",
             "training"
         ])(main=MainFrame(self), clustering=ClusteringFrame(self), training=TrainingFrame(self))
-        self.views.main.render()
+        self.current_view: ViewBase = self.views.main
+        self.current_view.render()
 
-    def get_current_meta(self):
-        if not self.is_initialized:
-            return {}
-        return self.session_config["data"].get(self._image_paths[self._current_index], {})
+    def select_folder(self):
+        image_dir = Path(filedialog.askdirectory(title="Select Folder"))
+        self._image_paths = [str(f) for f in image_dir.rglob("*") if f.suffix in [".jpeg", ".jpg", ".png"]]
+        self.create_session_config(image_dir)
+        self._current_index = 0
+        self.current_view.render()
+
+    def switch_to_view(self, view: ViewBase):
+        self.current_view.frame_master.destroy()
+        self.current_view = view
+        self.current_view.render()
+
+    def set_project_toolbar(self, master: tk.Menu):
+        project = tk.Menu(master, tearoff=0)
+        project.add_command(label="Select Folder", command=self.select_folder)
+        export = tk.Menu(project, tearoff=0)
+        export.add_command(label="Raw json")
+        project.add_cascade(menu=export, label="Export As")
+        return project
+
+    def set_navigation_toolbar(self, master: tk.Menu):
+        navigate = tk.Menu(master, tearoff=0)
+        for view_name in self.views._asdict():
+            navigate.add_command(label=view_name,
+                                 command=partial(self.switch_to_view, getattr(self.views, view_name)))
+        return navigate
 
     @property
     def is_initialized(self):
@@ -67,17 +93,6 @@ class App:
     def sort_mode(self, value):
         assert value in self.sort_modes
         self._sort_mode = value
-
-    def get_current_image_path(self):
-        return self._image_paths[self._current_index]
-
-    def _get_session_dir(self):
-        session_name = self.session_config["name"]
-        return Path(WORK_DIR) / f"sessions/{session_name}"
-
-    def get_stats(self):
-        return f"Progress: {len(self.session_config['data'])}/{len(self._image_paths)}\n" \
-               f"Id: {self._current_index}"
 
     def create_session_config(self, session_dir: Path):
         session_file_name = self.full_session_config.get(str(session_dir))
@@ -97,10 +112,36 @@ class App:
         else:
             with open(session_file_name) as session_file:
                 self.session_config = json.load(session_file)
-            assert self.session_config["total_files"] == len(self._image_paths), \
-                f"Tried to resume session {session_dir} but missing " \
-                f"{self.session_config['total_files'] - len(self._image_paths)}"
+
+            missing_keys = set(self.session_config["data"]).difference(set(self._image_paths))
+            if missing_keys:
+                print("Missing: ", missing_keys)
+                ans = messagebox.askyesno(
+                    message=f"Tried to resume session {session_dir} but missing " \
+                            f"{len(missing_keys)} in the folder. See logs for details. "
+                            f"Total files mismatch: {self.session_config['total_files'] - len(self._image_paths)} files. "
+                            f"Would you like to continue?")
+                if not ans:
+                    self.session_config = None
+                    self._image_paths = []
+                    return
         self.save_state()
+
+    def _get_session_dir(self):
+        session_name = self.session_config["name"]
+        return Path(WORK_DIR) / f"sessions/{session_name}"
+
+    def get_current_meta(self):
+        if not self.is_initialized:
+            return {}
+        return self.session_config["data"].get(self._image_paths[self._current_index], {})
+
+    def get_current_image_path(self):
+        return self._image_paths[self._current_index]
+
+    def get_stats(self):
+        return f"Progress: {len(self.session_config['data'])}/{len(self._image_paths)}\n" \
+               f"Id: {self._current_index}"
 
     def save_state(self):
         if not self.sessions_config_path.parent.exists():
@@ -113,11 +154,6 @@ class App:
             session_path.parent.mkdir(parents=True)
         with open(session_path, "w") as session_data:
             json.dump(self.session_config, session_data)
-
-    def select_folder(self, image_dir):
-        self._image_paths = [str(f) for f in image_dir.rglob("*") if f.suffix in [".jpeg", ".jpg", ".png"]]
-        self.create_session_config(image_dir)
-        self._current_index = 0
 
     def make_record(self, prompt, tags):
         if not self.is_initialized:
@@ -148,7 +184,7 @@ class App:
 
     def go_to_image(self, id_):
         if self.is_initialized:
-            self._current_index = max(len(self._image_paths) - 1, min(0, id_))
+            self._current_index = min(len(self._image_paths) - 1, max(0, id_))
 
     def update_tag_structure(self, tag: str, new_path: str):
         if self.is_initialized and tag in self.session_config["tags"]:

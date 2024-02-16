@@ -20,14 +20,23 @@ class ViewBase(ABC):
     def render(self):
         pass
 
-    def switch_to_view(self, view_name: str):
-        self.frame_master.destroy()
-        getattr(self.app.views, view_name).render()
+    @abstractmethod
+    def get_tools(self, master: tk.Menu) -> tk.Menu:
+        pass
 
-    def get_navigation_menu(self, master):
-        var = tk.StringVar()
-        menu = tk.OptionMenu(master, var, *list(self.app.views._asdict().keys()),
-                             command=lambda x: self.switch_to_view(x))
+    def get_navigation_menu(self, master: tk.Tk):
+        menu = tk.Menu(master)
+        project = self.app.set_project_toolbar(menu)
+        menu.add_cascade(menu=project, label="Project")
+
+        navigate = self.app.set_navigation_toolbar(menu)
+        menu.add_cascade(menu=navigate, label="Navigate")
+
+        tools = self.get_tools(menu)
+        menu.add_cascade(menu=tools, label="Tools")
+
+        master.config(menu=menu)
+        master.update()
         return menu
 
 
