@@ -2,12 +2,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from core_app import App
+    from core.app import App
 from abc import ABC, abstractmethod
 
 import tkinter as tk
-from tkinter import Frame as FrameBase
-from config import DEBUG
 
 
 class ViewBase(ABC):
@@ -40,18 +38,4 @@ class ViewBase(ABC):
         return menu
 
 
-class Frame(FrameBase):
-    def __init__(self, *args, pack=False, **kwargs):
-        if not DEBUG:
-            super().__init__(*args, **kwargs)
-        else:
-            super().__init__(*args, **kwargs,
-                             highlightbackground="black", highlightthickness=2,
-                             )
-            name = kwargs.get("name")
-            if name is not None:
-                label = tk.Label(self, text=name, font=('Calibri', 8), padx=0, pady=0)
-                if not pack:
-                    label.grid(row=10, column=0)
-                else:
-                    label.pack()
+

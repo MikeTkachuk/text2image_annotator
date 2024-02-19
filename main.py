@@ -1,6 +1,6 @@
 import tkinter as tk
 
-from core_app import App
+from core import App
 
 
 if __name__ == "__main__":

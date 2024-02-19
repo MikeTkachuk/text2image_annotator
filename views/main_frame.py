@@ -2,60 +2,11 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import simpledialog, ttk, scrolledtext
 
-import PIL
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageTk
 
-from views.view_base import ViewBase, Frame
+from views.view_base import ViewBase
 from config import *
-
-
-def resize_pad_square(image_path, size):
-    try:
-        image = Image.open(image_path)
-    except PIL.UnidentifiedImageError:
-        square_image = Image.new("RGB", (size, size), (255, 255, 230))
-        dr = ImageDraw.Draw(square_image)
-        dr.text((size / 2, size / 2), text="Invalid image", align="center", fill=(200, 20, 10))
-        return square_image
-    width, height = image.size
-
-    # Determine the aspect ratio
-    aspect_ratio = width / height
-
-    # Calculate new dimensions while maintaining the aspect ratio
-    if width > height:
-        new_width = size
-        new_height = int(size / aspect_ratio)
-    else:
-        new_width = int(size * aspect_ratio)
-        new_height = size
-
-    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
-
-    # Create a square image with a white background
-    square_image = Image.new("RGB", (size, size), (255, 255, 255))
-    square_image.paste(resized_image, ((size - new_width) // 2, (size - new_height) // 2))
-    return square_image
-
-
-def put_node(tree: ttk.Treeview, path, node: str, score=None):
-    def path_to_node_id(p: Path):
-        if not len(p.parents):
-            return ''
-        else:
-            return p.as_posix()
-
-    path = Path(path)
-    parents = [path] + list(path.parents)
-    if len(parents) > 1:
-        for i in range(1, len(parents)):
-            parent_id = path_to_node_id(parents[-i])
-            node_id = path_to_node_id(parents[-i - 1])
-            if not tree.exists(node_id):
-                tree.insert(parent_id,
-                            "end", node_id,
-                            text=parents[-i - 1].name, open=True)
-    tree.insert(path_to_node_id(parents[0]), 'end', node, text=node, values=(score,))
+from views.utils import Frame, put_node, resize_pad_square
 
 
 class MainFrame(ViewBase):

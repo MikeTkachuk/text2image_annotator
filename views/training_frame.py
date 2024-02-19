@@ -1,12 +1,12 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from core_app import App
+    from core.app import App
 
 import tkinter as tk
 
-from views.view_base import ViewBase, Frame
-from config import *
+from views.view_base import ViewBase
+from views.utils import Frame
 
 
 class TrainingFrame(ViewBase):

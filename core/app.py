@@ -8,7 +8,9 @@ from tqdm import tqdm
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-from tag_recommendation import EmbeddingStore
+from core.embedding import EmbeddingStoreRegistry
+from core.task import TaskRegistry
+from core.clustering import Clustering
 from views import *
 from config import *
 
@@ -21,28 +23,26 @@ def sort_with_ranks(seq, ranks, reverse=True, return_rank=True):
         return sorted_cat
     return [cat_el[0] for cat_el in sorted_cat]
 
-
+# todo session info, import, export, help, add/manage precompute embedding store
 class App:
     def __init__(self, master):
         self.sessions_config_path = Path(WORK_DIR) / "sessions.json"
         if not self.sessions_config_path.exists():
             self.sessions_config_path.touch()
-            self.full_session_config = {}
+            self.full_session_config = {"sessions": {}, "meta": {}}
         else:
             with open(self.sessions_config_path) as session_config_file:
                 self.full_session_config = json.load(session_config_file)
         self.session_config = None
-        self.emb_store: EmbeddingStore = None
+        self.task_registry: TaskRegistry = None
+        self.embstore_registry: EmbeddingStoreRegistry = None
         self._image_paths = []  # List to store image paths
         self._current_index = 0  # Index of the currently displayed image
         self.master = master
 
+        # processors
+
         # config values
-        self.sort_modes = ["alphabetic",
-                           "popularity",
-                           "openai/clip-vit-base-patch32",
-                           "openai/clip-vit-large-patch14"]
-        self.sort_models_names = self.sort_modes[2:]
         self.sort_mode = "alphabetic"
 
         # views
@@ -50,12 +50,22 @@ class App:
             "main",
             "clustering",
             "training"
-        ])(main=MainFrame(self), clustering=ClusteringFrame(self), training=TrainingFrame(self))
+        ])(
+            main=MainFrame(self),
+            clustering=ClusteringFrame(self),
+            training=TrainingFrame(self)
+        )
         self.current_view: ViewBase = self.views.main
         self.current_view.render()
 
-    def select_folder(self):
-        image_dir = Path(filedialog.askdirectory(title="Select Folder"))
+        # load
+        if self.full_session_config["meta"].get("last_session"):
+            self.select_folder(self.full_session_config["meta"].get("last_session"))
+
+    def select_folder(self, image_dir=None):
+        if image_dir is None:
+            image_dir = filedialog.askdirectory(title="Select Folder")
+        image_dir = Path(image_dir)
         self._image_paths = [str(f) for f in image_dir.rglob("*") if f.suffix in [".jpeg", ".jpg", ".png"]]
         self.create_session_config(image_dir)
         self._current_index = 0
@@ -77,7 +87,7 @@ class App:
     def set_navigation_toolbar(self, master: tk.Menu):
         navigate = tk.Menu(master, tearoff=0)
         for view_name in self.views._asdict():
-            navigate.add_command(label=view_name,
+            navigate.add_command(state="normal" if self.is_initialized else "disabled",label=view_name,
                                  command=partial(self.switch_to_view, getattr(self.views, view_name)))
         return navigate
 
@@ -94,8 +104,18 @@ class App:
         assert value in self.sort_modes
         self._sort_mode = value
 
+    @property
+    def sort_model_names(self):
+        if self.embstore_registry is None:
+            return []
+        return list(self.embstore_registry.stores)
+
+    @property
+    def sort_modes(self):
+        return ["alphabetic", "popularity"] + self.sort_model_names
+
     def create_session_config(self, session_dir: Path):
-        session_file_name = self.full_session_config.get(str(session_dir))
+        session_file_name = self.full_session_config["sessions"].get(str(session_dir))
 
         if session_file_name is None:
             session_name = session_dir.name
@@ -108,7 +128,7 @@ class App:
                 "data": {}
             }
             self.session_config = new_session_config
-            self.full_session_config[str(session_dir)] = str(self._get_session_dir() / "data.json")
+            self.full_session_config["sessions"][str(session_dir)] = str(self._get_session_dir() / "data.json")
         else:
             with open(session_file_name) as session_file:
                 self.session_config = json.load(session_file)
@@ -125,6 +145,15 @@ class App:
                     self.session_config = None
                     self._image_paths = []
                     return
+
+        self.task_registry = TaskRegistry(self.session_config["data"],
+                                          self._image_paths,
+                                          save_dir=self._get_session_dir())
+        self.embstore_registry = EmbeddingStoreRegistry(self._get_session_dir(), self.get_data_folder())
+        for model_name in ["openai/clip-vit-base-patch32",
+                           "openai/clip-vit-large-patch14"]:
+            self.embstore_registry.add_store(model_name)
+        self.full_session_config["meta"]["last_session"] = str(session_dir)
         self.save_state()
 
     def _get_session_dir(self):
@@ -135,6 +164,11 @@ class App:
         if not self.is_initialized:
             return {}
         return self.session_config["data"].get(self._image_paths[self._current_index], {})
+
+    def get_data_folder(self):
+        if not self.is_initialized:
+            return None
+        return self.session_config["target"]
 
     def get_current_image_path(self):
         return self._image_paths[self._current_index]
@@ -149,7 +183,7 @@ class App:
         with open(self.sessions_config_path, "w") as sessions_config_file:
             json.dump(self.full_session_config, sessions_config_file)
 
-        session_path = Path(self.full_session_config[self.session_config["target"]])
+        session_path = Path(self.full_session_config["sessions"][self.session_config["target"]])
         if not session_path.parent.exists():
             session_path.parent.mkdir(parents=True)
         with open(session_path, "w") as session_data:
@@ -231,28 +265,27 @@ class App:
         if self.sort_mode == "popularity":
             raise NotImplementedError
 
-        if self.emb_store is None or self.sort_mode != self.emb_store.model_name:
-            self.recompute_recommendation()
         ranks = self.emb_store.get_tag_ranks(self.session_config["tags"],
-                                             self._image_paths[self._current_index],
-                                             self.session_config["target"])
+                                             self._image_paths[self._current_index])
         return sort_with_ranks(self.session_config["tags"], ranks)
 
-    def recompute_recommendation(self):
+    @property
+    def emb_store(self):
         if not self.is_initialized:
-            return
-        if self.sort_mode not in self.sort_models_names:
-            return
+            return None
+        return self.embstore_registry.stores.get(self.sort_mode)
 
-        if self.emb_store is None or self.sort_mode != self.emb_store.model_name:
-            self.emb_store = EmbeddingStore(self._get_session_dir() / ".emb_store",
-                                            model_name=self.sort_mode)
+    def recompute_recommendation(self):
+        if self.emb_store is None:
+            return
 
         for img_path in tqdm(self.session_config["data"], desc="Loading image embeddings"):
-            self.emb_store.get_image_embedding(img_path, self.session_config["target"])
+            self.emb_store.get_image_embedding(img_path)
 
         for tag in tqdm(self.session_config["tags"], desc="Loading tag embeddings"):
             self.emb_store.get_tag_embedding(tag)
 
         # perform training
         # =====
+
+    # clustering funcs
