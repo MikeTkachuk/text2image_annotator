@@ -49,7 +49,7 @@ class EmbeddingStore:
             with open(self.store_path / "embedder_spec.txt") as spec_file:
                 assert model_name == spec_file.read(), "Could not load emb store with different model"
 
-        self.embedder = get_embedder(self.model_name)
+        self._embedder = None
 
         # transform is unimplemented feature of fine-tuning an mlp on top of embeddings
         self.transform_path = self.store_path / "transform.pt"
@@ -63,6 +63,16 @@ class EmbeddingStore:
             self.tag_embeddings = torch.load(self.tag_embeddings_path)
         else:
             self.tag_embeddings = {}
+
+    @property
+    def embedder(self):
+        if self._embedder is None:
+            self._embedder = get_embedder(self.model_name)
+        return self._embedder
+
+    def idle(self):
+        del self._embedder
+        self._embedder = None
 
     @torch.no_grad()
     def get_image_embedding(self, abs_path, load_only=False):
@@ -109,8 +119,11 @@ class EmbeddingStore:
 
         return cosines.flatten().cpu().numpy().tolist()
 
-    def precompute(self):
-        pass
+    def precompute(self, samples, callback=None):
+        for i, sample in enumerate(samples):
+            self.get_image_embedding(sample)
+            if callback is not None:
+                callback(i)
 
 
 class EmbeddingStoreRegistry:
@@ -165,6 +178,8 @@ class EmbeddingStoreRegistry:
 
     def choose_store(self, store_name):
         assert store_name in self.stores
+        if self._current_store:
+            self.get_current_store().idle()
         self._current_store = store_name
         print("store: ", self._current_store)
 

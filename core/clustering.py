@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from PIL import ImageTk, Image
 import numpy as np
 from sklearn.decomposition import PCA
+from sklearn.neighbors import NearestNeighbors
 import cv2 as cv
+from matplotlib.pyplot import get_cmap
 
 from core.embedding import EmbeddingStoreRegistry
 from core.task import TaskRegistry
@@ -12,6 +14,7 @@ from config import CLUSTERING_IMG_SIZE
 
 try:
     from tsnecuda import TSNE
+
     TSNE_CUDA_AVAILABLE = True
 except (ImportError, Exception):
     TSNE_CUDA_AVAILABLE = False
@@ -22,6 +25,16 @@ class ClusteringResult:
     filenames: List[str]
     vectors: np.ndarray
     labels: List[int]
+    neighbor_tree: NearestNeighbors
+    base_plot: np.ndarray
+    neighbors_plot: np.ndarray = None
+
+
+def draw_alpha_rect(img, pts, color=(50, 255, 100),alpha=0.5):
+    overlay = np.zeros_like(img)
+    overlay = cv.fillConvexPoly(overlay, cv.convexHull(pts), color)
+    overlay = cv.dilate(overlay, kernel=cv.getStructuringElement(cv.MORPH_ELLIPSE, (3, 3)))
+    return cv.addWeighted(img, 1-alpha, overlay, alpha, 0)
 
 
 class Clustering:
@@ -54,23 +67,78 @@ class Clustering:
             out = PCA(n_components=2, random_state=random_state).fit_transform(pca_reduced)
         out = out - out.min(axis=0)
         out = out / out.max(axis=0) * 0.8 + 0.1
-        res = ClusteringResult(filenames=samples, vectors=out, labels=labels)
+        n_tree = NearestNeighbors().fit(out)
+        base_plot = self.draw_cluster_result(out, labels)
+        res = ClusteringResult(filenames=samples,
+                               vectors=out,
+                               labels=labels,
+                               neighbor_tree=n_tree,
+                               base_plot=base_plot
+                               )
         self._last_result = res
         return res
 
-    def draw_cluster_result(self, result=None):
-        if result is None:
-            result = self._last_result
+    def get_label_color(self, value: str | int):
+        if value == "selection":
+            return (255, 100, 50)
 
-        img = np.ones((CLUSTERING_IMG_SIZE, CLUSTERING_IMG_SIZE), dtype=np.uint8) * 255
-        for vec in result.vectors:
+        if value == -1:
+            return (100, 100, 100)
+
+        if value == -5:
+            return (100, 25, 25)
+        task = self.task_registry.get_current_task()
+        color = get_cmap("gist_rainbow")(value / len(task.categories_full))[:3]
+        color = np.array(color) * 255
+        return tuple(color.astype(np.uint8).tolist())
+
+    def draw_cluster_result(self, vectors, labels):
+        img = np.ones((CLUSTERING_IMG_SIZE, CLUSTERING_IMG_SIZE, 3), dtype=np.uint8) * 255
+        for vec, label in zip(vectors, labels):
             vec = vec * CLUSTERING_IMG_SIZE
-            img[int(vec[1]), int(vec[0])] = 0
-        img = cv.erode(img, kernel=np.ones((5,5), dtype=np.uint8))
+            img = cv.circle(img, [int(vec[0]), int(vec[1])],
+                            1, self.get_label_color(label)[:3], -1, cv.LINE_AA)
+            # img[int(vec[1]), int(vec[0])] = self.get_label_color(label)[:3]
+        return img
+
+    def get_base_plot(self):
+        if self._last_result is None:
+            img = np.ones((CLUSTERING_IMG_SIZE, CLUSTERING_IMG_SIZE), dtype=np.uint8) * 255
+            return ImageTk.PhotoImage(Image.fromarray(img))
+        return ImageTk.PhotoImage(Image.fromarray(self._last_result.base_plot))
+
+    def get_nearest_neighbors(self, x, y, n_neighbors):
+        if self._last_result is None:
+            return []
+
+        x /= CLUSTERING_IMG_SIZE
+        y /= CLUSTERING_IMG_SIZE
+        if n_neighbors < 1:
+            res = self._last_result.neighbor_tree.radius_neighbors([[x, y]],
+                                                                   radius=n_neighbors, sort_results=True)
+        else:
+            res = self._last_result.neighbor_tree.kneighbors([[x, y]], n_neighbors=int(n_neighbors))
+
+        res = (res[0][0], res[1][0])
+        res = sorted(zip(*res), key=lambda x: x[0])
+        res_vectors = [(CLUSTERING_IMG_SIZE * self._last_result.vectors[i[1]]).astype(np.int32) for i in res]
+        if res_vectors:
+            viz = draw_alpha_rect(self._last_result.base_plot, np.array([res_vectors]), alpha=0.25)
+        else:
+            viz = self._last_result.base_plot
+        self._last_result.neighbors_plot = viz
+
+        task = self.task_registry.get_current_task()
+        return (list(zip(*res))[1],
+                [self._last_result.filenames[i[1]] for i in res],
+                [task.label_name(self._last_result.labels[i[1]]) for i in res],
+                ImageTk.PhotoImage(Image.fromarray(viz)))
+
+    def draw_selection(self, ids):
+        img = np.copy(self._last_result.neighbors_plot)
+        for i in ids:
+            vec = self._last_result.vectors[i]
+            vec = vec * CLUSTERING_IMG_SIZE
+            img = cv.circle(img, [int(vec[0]), int(vec[1])],
+                            3, self.get_label_color("selection")[:3], -1, cv.LINE_AA)
         return ImageTk.PhotoImage(Image.fromarray(img))
-
-
-def cluster(embstore, tasks):
-    c = Clustering(embstore, tasks)
-    c.cluster()
-    return c.draw_cluster_result()

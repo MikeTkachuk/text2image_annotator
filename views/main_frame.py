@@ -63,13 +63,13 @@ class MainFrame(ViewBase):
         self.tag_rec_frame = Frame(self.inputs_frame, name="tag_rec_frame")
         self.tag_rec_frame.grid(row=1, column=1, pady="0 20", sticky="ws")
         self.tag_rec_mode = tk.StringVar()
-        self.tag_rec_mode.set("alphabetic")
-        self.tag_rec_mode_menu = tk.OptionMenu(self.tag_rec_frame, self.tag_rec_mode,
+        self.tag_rec_mode.set(self.app.sort_mode)
+        self.tag_rec_mode_menu = ttk.OptionMenu(self.tag_rec_frame, self.tag_rec_mode, self.app.sort_mode,
                                                *self.app.sort_modes,
                                                command=lambda x: setattr(self.app, "sort_mode", x))
         self.tag_rec_mode_menu.grid(row=1, column=0, sticky="ws")
 
-        self.recompute_button = tk.Button(self.tag_rec_frame, text="Recompute",
+        self.recompute_button = ttk.Button(self.tag_rec_frame, text="Recompute",
                                           command=lambda: (self.app.recompute_recommendation(),
                                                            self.filter_tag_choice()))
         self.recompute_button.grid(row=1, column=1, sticky="ws")
@@ -108,7 +108,7 @@ class MainFrame(ViewBase):
 
         self.tag_select_frame = Frame(self.tag_frame, name="tag_select_frame")
         self.tag_select_frame.grid(row=2, column=0, sticky="w")
-        self.tag_scrollbar = tk.Scrollbar(self.tag_select_frame, orient="vertical")
+        self.tag_scrollbar = ttk.Scrollbar(self.tag_select_frame, orient="vertical")
         self.tag_choice = ttk.Treeview(self.tag_select_frame, height=15 if not DEBUG else 2,
                                        yscrollcommand=self.tag_scrollbar.set, selectmode="browse",
                                        columns=("Rank",))

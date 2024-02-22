@@ -14,6 +14,7 @@ class Task:
         if isinstance(self.categories, str):
             self.categories = [self.categories]
         self.labels = []
+        self.user_override = {}
         self.models = {}
         self._current_model: str = None
 
@@ -23,6 +24,20 @@ class Task:
 
     def get_current_model_name(self):
         return self._current_model
+
+    def label_name(self, value: int):
+        if value == -5:
+            return "Invalid"
+        if value == -1:
+            return "Not labeled"
+
+        return self.categories_full[value]
+
+    @property
+    def categories_full(self):
+        if self.multiclass_mode == "empty_valid" or len(self.categories) == 1:
+            return ["Empty"] + self.categories
+        return self.categories
 
     def update_labels(self, samples, labelling):
         """
@@ -39,7 +54,9 @@ class Task:
         self.labels = []
         empty_is_category = len(self.categories) == 1 or self.multiclass_mode == "empty_valid"
         for sample in samples:
-            if sample in labelling:
+            if sample in self.user_override:
+                label = self.user_override[sample]
+            elif sample in labelling:
                 categories = [c in labelling[sample]["tags"] for c in self.categories]
                 if sum(categories) > 1:
                     label = -5
@@ -58,13 +75,25 @@ class Task:
                 label = -1
             self.labels.append(label)
 
+    def override_label(self, sample: str, label: int):
+        # todo it is a save state method
+        try:
+            self.label_name(label)
+        except IndexError:
+            raise RuntimeError("Can not override with invalid label")
+        self.user_override[sample] = label
+
     def add_model(self, model: Model, model_name: str):
         if model_name in self.models:
             return False
         self.models[model_name] = {"model": model, "predictions": None}
 
     def __dict__(self):
-        out = {"models": {}, "multiclass_mode": self.multiclass_mode, "categories": self.categories}
+        out = {"models": {},
+               "multiclass_mode": self.multiclass_mode,
+               "categories": self.categories,
+               "user_override": self.user_override
+               }
         for model_name in self.models:
             model_dict = self.models[model_name]["model"].__dict__()
             out["models"][model_name] = model_dict
@@ -73,6 +102,7 @@ class Task:
     @classmethod
     def load(cls, data: dict):
         task = Task(data["categories"], data["multiclass_mode"])
+        task.user_override = data["user_override"]
         for model in data["models"]:
             task.add_model(Model.load(data["models"][model]), model)
         return task
@@ -130,7 +160,7 @@ class TaskRegistry:
             raise RuntimeError(f"Invalid tags {tags} or mode {mode}")
         tags = sorted(tags)
         task_name = "_".join(tags)
-        if mode == "empty_valid":
+        if mode == "empty_valid" or len(tags) == 1:
             task_name += "_empty"
         if task_name in self.tasks:
             return False

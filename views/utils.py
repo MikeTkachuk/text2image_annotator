@@ -22,6 +22,7 @@ class Frame(FrameBase):
                 else:
                     label.pack()
 
+
 def put_node(tree: ttk.Treeview, path, node: str, score=None):
     def path_to_node_id(p: Path):
         if not len(p.parents):
@@ -78,7 +79,7 @@ def task_creation_popup(app, callback):
 
     tag_select_frame = Frame(window, name="tag_select_frame")
     tag_select_frame.pack()
-    tag_scrollbar = tk.Scrollbar(tag_select_frame, orient="vertical")
+    tag_scrollbar = ttk.Scrollbar(tag_select_frame, orient="vertical")
     tag_choice = ttk.Treeview(tag_select_frame, height=15,
                               yscrollcommand=tag_scrollbar.set, selectmode="extended",
                               )
@@ -90,8 +91,8 @@ def task_creation_popup(app, callback):
 
     task_mode_var = tk.StringVar()
     task_mode_var.set(app.task_registry.get_task_modes()[0])
-    task_mode_selection = tk.OptionMenu(window, task_mode_var,
-                                        *app.task_registry.get_task_modes())
+    task_mode_selection = ttk.OptionMenu(window, task_mode_var, app.task_registry.get_task_modes()[0],
+                                         *app.task_registry.get_task_modes())
     task_mode_selection.pack()
 
     for tag, tag_path, _ in zip(*app.search_tags("")):
@@ -117,6 +118,5 @@ def task_creation_popup(app, callback):
             return
         window.destroy()
 
-    create_button = tk.Button(window, text="Confirm", command=closure)
+    create_button = ttk.Button(window, text="Confirm", command=closure)
     create_button.pack()
-
