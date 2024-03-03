@@ -75,7 +75,7 @@ class EmbeddingStore:
         self._embedder = None
 
     @torch.no_grad()
-    def get_image_embedding(self, abs_path, load_only=False):
+    def get_image_embedding(self, abs_path, load_only=False, normalize=False):
         rel_path = Path(abs_path).relative_to(self.data_folder_path)
         abs_emb_path = self.store_path / rel_path.parent / (rel_path.stem + ".pt")
         if abs_emb_path.exists():
@@ -87,8 +87,11 @@ class EmbeddingStore:
                 embedding = self.embedder(Image.open(abs_path))
                 abs_emb_path.parent.mkdir(parents=True, exist_ok=True)
                 torch.save(embedding, abs_emb_path)
-            except:
+            except Exception as e:
+                print(e, abs_path)
                 embedding = None
+        if normalize and embedding is not None:
+            embedding = embedding / torch.norm(embedding)
         return embedding
 
     @torch.no_grad()
@@ -120,10 +123,14 @@ class EmbeddingStore:
         return cosines.flatten().cpu().numpy().tolist()
 
     def precompute(self, samples, callback=None):
+        count = 0
         for i, sample in enumerate(samples):
-            self.get_image_embedding(sample)
+            if self.get_image_embedding(sample) is not None:
+                count += 1
             if callback is not None:
                 callback(i)
+
+        return count
 
 
 class EmbeddingStoreRegistry:

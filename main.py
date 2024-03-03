@@ -1,10 +1,9 @@
-import tkinter as tk
-
 from core import App
+from views.utils import BindTk
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    root = BindTk()
 
     app = App(root)
     root.geometry("+100+10")

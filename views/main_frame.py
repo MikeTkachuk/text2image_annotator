@@ -25,7 +25,7 @@ class MainFrame(ViewBase):
         self.master.title("Image Viewer")
 
         # Toolbar
-        self.toolbar = self.get_navigation_menu(self.master)
+        self.toolbar = self.get_toolbar(self.master)
 
         self.frame_master = Frame(master=self.master, padx=4, pady=4, name="frame_master")
         self.frame_master.grid(row=0, column=0)
@@ -123,7 +123,7 @@ class MainFrame(ViewBase):
         self.tag_choice.bind("<Return>", self.select_tag)
         self.tag_choice.bind("<Double-1>", self.select_tag)
         self.master.bind("<Escape>", lambda x: (self.tag_search.focus_set(),
-                                                self.tag_search.selection_range(0, 'end')))
+                                                self.tag_search.selection_range(0, 'end')), user=True)
         self.tag_choice.bind("<<TreeviewSelect>>", lambda x: (self.tag_structure_entry.delete(0, 'end'),
                                                               self.tag_structure_entry.insert(0,
                                                                                               self._get_current_tag_path()),
@@ -161,9 +161,9 @@ class MainFrame(ViewBase):
         self.progress_info.grid(row=1, column=0, sticky="w")
 
         # Other
-        self.master.bind("<Control-Right>", lambda x: self.show_next_image())
-        self.master.bind("<Control-Left>", lambda x: self.show_previous_image())
-        self.master.bind("<Tab>", self.focus_routine)
+        self.master.bind("<Control-Right>", lambda x: self.show_next_image(), user=True)
+        self.master.bind("<Control-Left>", lambda x: self.show_previous_image(), user=True)
+        self.master.bind("<Tab>", self.focus_routine, user=True)
 
     def focus_routine(self, event):
         current_widget = event.widget

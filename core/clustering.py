@@ -30,11 +30,11 @@ class ClusteringResult:
     neighbors_plot: np.ndarray = None
 
 
-def draw_alpha_rect(img, pts, color=(50, 255, 100),alpha=0.5):
+def draw_alpha_rect(img, pts, color=(50, 255, 100), alpha=0.5):
     overlay = np.zeros_like(img)
     overlay = cv.fillConvexPoly(overlay, cv.convexHull(pts), color)
     overlay = cv.dilate(overlay, kernel=cv.getStructuringElement(cv.MORPH_ELLIPSE, (3, 3)))
-    return cv.addWeighted(img, 1-alpha, overlay, alpha, 0)
+    return cv.addWeighted(img, 1 - alpha, overlay, alpha, 0)
 
 
 class Clustering:
@@ -49,8 +49,9 @@ class Clustering:
         embs = []
         available_samples = []
         labels = []
-        for sample, label in zip(self.samples, self.task_registry.get_current_task().labels):
-            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True)
+        self.task_registry.update_current_task()
+        for sample, label in zip(self.samples, self.task_registry.get_current_labels()):
+            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True, normalize=True)
             if emb is not None:
                 embs.append(emb.cpu().numpy())
                 available_samples.append(sample)
@@ -58,9 +59,19 @@ class Clustering:
         embs = np.concatenate(embs, axis=0)
         return available_samples, embs, labels
 
+    def update_labels(self):
+        if self._last_result is None:
+            return
+        label_lookup = self.task_registry.get_current_labels(as_dict=True)
+        self._last_result.labels = [label_lookup[s] for s in self._last_result.filenames]
+        self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
+                                                               self._last_result.labels)
+
     def cluster(self, pca_components=50, random_state=42, tsne=True):
+        if not self.task_registry.is_initialized:
+            return
         samples, embs, labels = self.get_available_embeddings()
-        pca_reduced = PCA(n_components=pca_components, random_state=random_state).fit_transform(embs)
+        pca_reduced = PCA(n_components=pca_components, random_state=random_state, svd_solver="full").fit_transform(embs)
         if TSNE_CUDA_AVAILABLE and tsne:
             out = TSNE(random_seed=random_state).fit_transform(pca_reduced)
         else:
@@ -98,7 +109,6 @@ class Clustering:
             vec = vec * CLUSTERING_IMG_SIZE
             img = cv.circle(img, [int(vec[0]), int(vec[1])],
                             1, self.get_label_color(label)[:3], -1, cv.LINE_AA)
-            # img[int(vec[1]), int(vec[0])] = self.get_label_color(label)[:3]
         return img
 
     def get_base_plot(self):
@@ -107,15 +117,25 @@ class Clustering:
             return ImageTk.PhotoImage(Image.fromarray(img))
         return ImageTk.PhotoImage(Image.fromarray(self._last_result.base_plot))
 
+    def get_legend(self, img_size=32):
+        out = []
+        if self._last_result is None:
+            return out
+        for label in sorted(set(self._last_result.labels)):
+            sample = np.zeros((img_size, img_size, 3), dtype=np.uint8)
+            sample[:, :] = np.array(self.get_label_color(label))
+            out.append((sample, self.task_registry.get_current_task().label_name(label)))
+        return out
+
     def get_nearest_neighbors(self, x, y, n_neighbors):
         if self._last_result is None:
-            return []
+            return None
 
         x /= CLUSTERING_IMG_SIZE
         y /= CLUSTERING_IMG_SIZE
         if n_neighbors < 1:
             res = self._last_result.neighbor_tree.radius_neighbors([[x, y]],
-                                                                   radius=n_neighbors, sort_results=True)
+                                                                   radius=n_neighbors, sort_results=False)
         else:
             res = self._last_result.neighbor_tree.kneighbors([[x, y]], n_neighbors=int(n_neighbors))
 
@@ -129,7 +149,7 @@ class Clustering:
         self._last_result.neighbors_plot = viz
 
         task = self.task_registry.get_current_task()
-        return (list(zip(*res))[1],
+        return (list(zip(*res))[1] if res else [],
                 [self._last_result.filenames[i[1]] for i in res],
                 [task.label_name(self._last_result.labels[i[1]]) for i in res],
                 ImageTk.PhotoImage(Image.fromarray(viz)))
@@ -140,5 +160,5 @@ class Clustering:
             vec = self._last_result.vectors[i]
             vec = vec * CLUSTERING_IMG_SIZE
             img = cv.circle(img, [int(vec[0]), int(vec[1])],
-                            3, self.get_label_color("selection")[:3], -1, cv.LINE_AA)
+                            2, self.get_label_color("selection")[:3], -1, cv.LINE_AA)
         return ImageTk.PhotoImage(Image.fromarray(img))

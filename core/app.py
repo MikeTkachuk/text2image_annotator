@@ -15,7 +15,7 @@ from core.embedding import EmbeddingStoreRegistry
 from core.task import TaskRegistry
 from core.clustering import Clustering
 from views import *
-from views.utils import Frame
+from views.utils import Frame, task_creation_popup, BindTk
 from config import *
 
 
@@ -28,9 +28,11 @@ def sort_with_ranks(seq, ranks, reverse=True, return_rank=True):
     return [cat_el[0] for cat_el in sorted_cat]
 
 
-# todo session info, import, export, help, add/manage precompute embedding store
+# todo session info, import, export, help, manage models (models dependent on tasks and embstores),
+#
+
 class App:
-    def __init__(self, master):
+    def __init__(self, master: BindTk):
         self.sessions_config_path = Path(WORK_DIR) / "sessions.json"
         if not self.sessions_config_path.exists():
             self.sessions_config_path.touch()
@@ -81,6 +83,7 @@ class App:
         self.current_view.render()
 
     def switch_to_view(self, view: ViewBase):
+        self.master.unbind_all_user()
         self.current_view.frame_master.destroy()
         self.current_view = view
         self.current_view.render()
@@ -94,7 +97,11 @@ class App:
         project.add_separator()
 
         project.add_command(label="Session info", command=self.session_info_popup)
+        project.add_command(label="Manage tasks", command=self.manage_tasks_popup)
         project.add_command(label="Manage embedder", command=self.manage_embedder_popup)
+        project.add_command(label="Manage models", command=self.manage_models_popup)
+        project.add_separator()
+
         return project
 
     def set_navigation_toolbar(self, master: tk.Menu):
@@ -159,14 +166,13 @@ class App:
                     self._image_paths = []
                     return
 
-        self.task_registry = TaskRegistry(self.session_config["data"],
-                                          self._image_paths,
-                                          save_dir=self._get_session_dir())
         self.embstore_registry = EmbeddingStoreRegistry(self._get_session_dir(), self.get_data_folder())
-        self.clustering = Clustering(self.embstore_registry, self.task_registry)
         for model_name in ["openai/clip-vit-base-patch32",
                            "openai/clip-vit-large-patch14"]:
             self.embstore_registry.add_store(model_name)
+        self.task_registry = TaskRegistry(self.session_config["data"], self._image_paths, self.embstore_registry,
+                                          save_dir=self._get_session_dir())
+        self.clustering = Clustering(self.embstore_registry, self.task_registry)
         self.full_session_config["meta"]["last_session"] = str(session_dir)
         self._load_session_metadata()
         self.save_state()
@@ -263,6 +269,8 @@ class App:
 
     def go_to_image(self, id_):
         if self.is_initialized:
+            if not isinstance(id_, int):
+                id_ = self._image_paths.index(id_)
             self._current_index = min(len(self._image_paths) - 1, max(0, id_))
 
     def update_tag_structure(self, tag: str, new_path: str):
@@ -335,11 +343,94 @@ class App:
 
     # popups
     def session_info_popup(self):
-        pass
+        from PIL import Image
+        window = tk.Toplevel(self.master)
+        window.title("Session status")
+
+        err_paths_frame = Frame(window, name="err_paths_frame", pack=True)
+        err_paths_frame.pack()
+        err_label = tk.Label(err_paths_frame, text="#Invalid paths: ")
+        err_label.pack(side="left")
+
+        def err_compute():
+            count = 0
+            for path in self._image_paths:
+                try:
+                    Image.open(path)
+                except Exception as e:
+                    print(e, path)
+                    count += 1
+            err_label.config(text=f"#Invalid paths: {count}. See logs for full path")
+
+        ttk.Button(err_paths_frame, text="Compute", command=err_compute).pack(side="left")
+
+    def manage_tasks_popup(self):
+        def reload_comboboxes():
+            registry = self.task_registry
+            registry.validate_selection()
+            task_names = list(registry.tasks)
+            task_selection.config(values=task_names)
+            model_names = list(registry.get_current_models())
+            model_selection.config(values=model_names)
+            if registry.is_initialized:
+                task_selection.current(task_names.index(registry.get_current_task_name()))
+                task = registry.get_current_task()
+                if task.is_initialized:
+                    model_selection.current(
+                        model_names.index(task.get_current_model_name()))
+
+        window = tk.Toplevel(self.master, name="manage_tasks")
+        window.title("Task settings")
+        task_selection_frame = Frame(master=window, name="task_selection_frame")
+        task_selection_frame.grid(row=0, column=0, padx=10, pady=10)
+
+        task_selection_var = tk.StringVar()
+        task_selection = ttk.Combobox(task_selection_frame, textvariable=task_selection_var,
+                                      values=list(self.task_registry.tasks),
+                                      )
+        task_selection.var = task_selection_var
+
+        task_selection.bind("<<ComboboxSelected>>",
+                            lambda x: (self.task_registry.choose_task(task_selection.get()),
+                                       reload_comboboxes())
+                            )
+
+        task_selection.grid(row=0, column=0)
+        add_task_button = ttk.Button(task_selection_frame,
+                                     text="Add task",
+                                     command=lambda: task_creation_popup(self, reload_comboboxes))
+        add_task_button.grid(row=0, column=1)
+
+        def confirm_delete(delete_func):
+            if messagebox.askokcancel(title="Confirm deletion", message="Delete?"):
+                delete_func()
+                reload_comboboxes()
+
+        delete_task_button = ttk.Button(task_selection_frame,
+                                        text="Delete task",
+                                        command=lambda: confirm_delete(self.task_registry.delete_task))
+        delete_task_button.grid(row=0, column=2)
+
+        model_selection_var = tk.StringVar()
+        model_selection = ttk.Combobox(task_selection_frame, textvariable=model_selection_var,
+                                       values=list(self.task_registry.get_current_models()))
+        model_selection.var = model_selection_var
+        model_selection.bind("<<ComboboxSelected>>",
+                             lambda x: self.task_registry.get_current_task()
+                             .choose_model(model_selection_var.get()))
+        model_selection.grid(row=1, column=0)
+        add_model_button = ttk.Button(task_selection_frame, text="Add model",
+                                      command=lambda: self.switch_to_view(self.views.training))
+        add_model_button.grid(row=1, column=1)
+        delete_model_button = ttk.Button(task_selection_frame,
+                                         text="Delete model",
+                                         command=lambda: confirm_delete(self.task_registry.delete_model))
+        delete_model_button.grid(row=1, column=2)
+        reload_comboboxes()
 
     def manage_embedder_popup(self):
-        window = tk.Toplevel(self.master)
-        window.title("New task")
+        window = tk.Toplevel(self.master, name="manage_embedder")
+        window.title("Embedder settings")
 
         emb_info_frame = Frame(window, name="emb_info_frame", pack=True)
         emb_info_frame.pack(padx=20)
@@ -366,8 +457,8 @@ class App:
                 error_label.update()
 
         add_by_name = ttk.Button(emb_info_frame, text="Add model",
-                                command=_add_by_name
-                                )
+                                 command=_add_by_name
+                                 )
         add_by_name.pack(side="left")
 
         def _add_by_path():
@@ -383,8 +474,8 @@ class App:
                 error_label.update()
 
         add_by_path = ttk.Button(emb_info_frame, text="Browse",
-                                command=_add_by_path
-                                )
+                                 command=_add_by_path
+                                 )
         add_by_path.pack(side="left")
 
         precompute_frame = Frame(window, name="precompute_frame", pack=True)
@@ -434,9 +525,9 @@ class App:
                 # time.sleep(1)
 
             def target():
-                store.precompute(selected, callback)
+                count = store.precompute(selected, callback)
                 try:  # try if not closed
-                    message_label.config(text=f"")
+                    message_label.config(text=f"#Errors: {len(selected) - count}")
                     message_label.update()
                     update_info_label()
                 except:
@@ -465,3 +556,70 @@ class App:
 
         exit_button = ttk.Button(window, text="Ok", command=closure)
         exit_button.pack(side="bottom", pady=20)
+
+    def manage_models_popup(self):
+        def reload():
+            registry = self.task_registry
+            registry.validate_selection()
+            task_names = list(registry.tasks)
+            task_selection.config(values=task_names)
+            model_names = list(registry.get_current_models(emb_filter=False))
+
+            if registry.is_initialized:
+                task_selection.current(task_names.index(registry.get_current_task_name()))
+            task = registry.get_current_task()
+            for item in model_selection.get_children():
+                model_selection.delete(item)
+
+            for model_name in model_names:
+                model = task.models[model_name]
+                values = (model_name, str(model.model), str(model.params), model.embstore_name, model.framework)
+                model_selection.insert("", "end", values[0], text=values[0],
+                                       values=values[1:])
+
+        window = tk.Toplevel(self.master, name="manage_tasks")
+        window.title("Task settings")
+        task_selection_frame = Frame(master=window, name="task_selection_frame")
+        task_selection_frame.grid(row=0, column=0, padx=10, pady=10)
+
+        task_selection_var = tk.StringVar()
+        task_selection = ttk.Combobox(task_selection_frame, textvariable=task_selection_var,
+                                      values=list(self.task_registry.tasks),
+                                      )
+        task_selection.var = task_selection_var
+
+        task_selection.bind("<<ComboboxSelected>>",
+                            lambda x: (self.task_registry.choose_task(task_selection.get()),
+                                       reload())
+                            )
+
+        task_selection.grid(row=0, column=0, sticky="w")
+
+        columns = ["#0", "Type", "Params", "Embstore", "Framework"]
+        model_selection = ttk.Treeview(task_selection_frame, columns=columns[1:])
+        column_names = ["Name", "Type", "Params", "Embstore", "Framework"]
+        widths = [100, 100, 350, 100, 100]
+        for c, cn, w in zip(columns, column_names, widths):
+            model_selection.column(c, width=w)
+            model_selection.heading(c, text=cn)
+        model_selection.grid(row=1, column=0, columnspan=2)
+
+        def confirm_delete(delete_func):
+            if messagebox.askokcancel(title="Confirm deletion", message="Delete?"):
+                delete_func()
+                reload()
+
+        def delete_model():
+            if not model_selection.selection():
+                return
+            if self.task_registry.is_initialized:
+                self.task_registry.get_current_task().delete_model(
+                    model_selection.selection()[0]
+                )
+
+        delete_model_button = ttk.Button(task_selection_frame,
+                                         text="Delete model",
+                                         command=lambda: confirm_delete(delete_model)
+                                         )
+        delete_model_button.grid(row=0, column=1, sticky="e")
+        reload()

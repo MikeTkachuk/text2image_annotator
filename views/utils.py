@@ -6,6 +6,33 @@ from PIL import Image, ImageDraw
 from config import DEBUG
 
 
+class BindTk(tk.Tk):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.bind_dict = {}
+
+    def bind(
+            self,
+            sequence=...,
+            func=...,
+            add=...,
+            user=False,
+    ):
+        funcid = super().bind(sequence, func, add)
+        if user:
+            self.bind_dict[sequence] = funcid
+
+    def unbind_all_user(self):
+        self.update()
+        self.update_idletasks()
+        for seq, func in self.bind_dict.items():
+            try:
+                self.unbind(seq, func)
+            except tk.TclError as e:
+                print(e)
+        self.bind_dict = {}
+
+
 class Frame(FrameBase):
     def __init__(self, *args, pack=False, **kwargs):
         if not DEBUG:
@@ -73,7 +100,57 @@ def resize_pad_square(image_path, size):
 
 
 def task_creation_popup(app, callback):
-    window = tk.Toplevel(master=app.master)
+    window = tk.Toplevel(master=app.master, name="task_creation_popup")
+    window.geometry("500x500")
+    window.title("New task")
+
+    tag_select_frame = Frame(window, name="tag_select_frame")
+    tag_select_frame.pack()
+    tag_scrollbar = ttk.Scrollbar(tag_select_frame, orient="vertical")
+    tag_choice = ttk.Treeview(tag_select_frame, height=15,
+                              yscrollcommand=tag_scrollbar.set, selectmode="extended",
+                              )
+    tag_choice.column("#0", width=210)
+    tag_choice.heading("#0", text="Name")
+    tag_scrollbar.config(command=tag_choice.yview)
+    tag_scrollbar.grid(row=0, column=1, sticky="nsw")
+    tag_choice.grid(row=0, column=0, sticky="w")
+
+    task_mode_var = tk.StringVar()
+    task_mode_var.set(app.task_registry.get_task_modes()[0])
+    task_mode_selection = ttk.OptionMenu(window, task_mode_var, app.task_registry.get_task_modes()[0],
+                                         *app.task_registry.get_task_modes())
+    task_mode_selection.pack()
+
+    for tag, tag_path, _ in zip(*app.search_tags("")):
+        put_node(tag_choice, tag_path, tag)
+
+    error_label = tk.Label(window, text="")
+    error_label.pack()
+
+    def closure(event=None):
+        try:
+            if any([tag_choice.get_children(t) for t in tag_choice.selection()]):
+                raise RuntimeError("Selected non-leaf nodes")
+            result = app.task_registry.add_task(tag_choice.selection(), task_mode_var.get())
+            if result:
+                callback()
+            else:
+                error_label.config(text="This task already exists")
+                error_label.update()
+                return
+        except RuntimeError as e:
+            error_label.config(text=str(e))
+            error_label.update()
+            return
+        window.destroy()
+
+    create_button = ttk.Button(window, text="Confirm", command=closure)
+    create_button.pack()
+
+
+def model_creation_popup(app, callback):
+    window = tk.Toplevel(master=app.master, name="task_creation_popup")
     window.geometry("500x500")
     window.title("New task")
 

@@ -3,20 +3,25 @@ from pathlib import Path
 from typing import Literal, Dict, get_args
 
 from core.model import Model
+from core.embedding import EmbeddingStoreRegistry
 
 TASK_MULTICLASS_MODES = Literal["empty_valid", "empty_invalid"]
 
 
+# todo: add task description
+
 class Task:
-    def __init__(self, categories, multiclass_mode: TASK_MULTICLASS_MODES = "empty_valid"):
+    def __init__(self, categories, task_path, multiclass_mode: TASK_MULTICLASS_MODES = "empty_valid"):
         self.multiclass_mode: TASK_MULTICLASS_MODES = multiclass_mode
+        self.path = Path(task_path)
         self.categories = categories
         if isinstance(self.categories, str):
             self.categories = [self.categories]
         self.labels = []
         self.user_override = {}
-        self.models = {}
+        self.models: Dict[str, Model] = {}
         self._current_model: str = None
+        self._last_load = None
 
     @property
     def is_initialized(self):
@@ -24,6 +29,11 @@ class Task:
 
     def get_current_model_name(self):
         return self._current_model
+
+    def get_current_model(self):
+        if not self.is_initialized:
+            return None
+        return self.models[self._current_model]
 
     def label_name(self, value: int):
         if value == -5:
@@ -33,11 +43,21 @@ class Task:
 
         return self.categories_full[value]
 
+    def label_encode(self, name: str):
+        if name == "Invalid":
+            return -5
+        if name == "Not labeled":
+            return -1
+        return self.categories_full.index(name)
+
     @property
     def categories_full(self):
         if self.multiclass_mode == "empty_valid" or len(self.categories) == 1:
             return ["Empty"] + self.categories
         return self.categories
+
+    def labels_dict(self, samples):
+        return dict(zip(samples, self.labels))
 
     def update_labels(self, samples, labelling):
         """
@@ -76,48 +96,77 @@ class Task:
             self.labels.append(label)
 
     def override_label(self, sample: str, label: int):
-        # todo it is a save state method
+        if label == -1:
+            try:
+                self.user_override.pop(sample)
+            except KeyError:
+                pass
+            return
         try:
             self.label_name(label)
         except IndexError:
             raise RuntimeError("Can not override with invalid label")
         self.user_override[sample] = label
+        self.save_state(light=True)
 
     def add_model(self, model: Model, model_name: str):
         if model_name in self.models:
             return False
-        self.models[model_name] = {"model": model, "predictions": None}
+        self.models[model_name] = model
+        self.save_state()
 
-    def __dict__(self):
+    def save_state(self, light=False):
         out = {"models": {},
                "multiclass_mode": self.multiclass_mode,
                "categories": self.categories,
                "user_override": self.user_override
                }
-        for model_name in self.models:
-            model_dict = self.models[model_name]["model"].__dict__()
-            out["models"][model_name] = model_dict
+        if not light or self._last_load is None:
+            for model_name in self.models:
+                model_dict = self.models[model_name].__dict__()
+                out["models"][model_name] = model_dict
+        else:
+            out["models"] = self._last_load["models"]
+        self._last_load = out
+        if not self.path.parent.exists():
+            self.path.parent.mkdir(parents=True)
+        with open(self.path, "w") as file:
+            json.dump(out, file)
         return out
 
     @classmethod
-    def load(cls, data: dict):
-        task = Task(data["categories"], data["multiclass_mode"])
+    def load(cls, path):
+        with open(path) as file:
+            data = json.load(file)
+        task = Task(data["categories"], path, data["multiclass_mode"])
+        task._last_load = data
         task.user_override = data["user_override"]
         for model in data["models"]:
             task.add_model(Model.load(data["models"][model]), model)
         return task
 
-    def choose_model(self, model_name):
-        assert model_name in self.models
+    def choose_model(self, model_name=None):
+        assert model_name in self.models or model_name is None
         self._current_model = model_name
         print("model: ", self._current_model)
 
+    def delete_model(self, model_name=None):
+        if self._current_model is None:
+            return
+        if model_name is None:
+            model_name = self._current_model
+        self.models.pop(model_name)
+        if model_name == self._current_model:
+            self._current_model = None
+        self.save_state()
+
 
 class TaskRegistry:
-    def __init__(self, dataset, all_samples, save_dir):
+    def __init__(self, dataset, all_samples, embstore_registry: EmbeddingStoreRegistry, save_dir):
         self._dataset = dataset
         self._all_samples = all_samples
         self.save_dir = Path(save_dir)
+        self.embstore_registry = embstore_registry
 
         self.tasks: Dict[str, Task] = {}
         self._current_task: str = None
@@ -127,10 +176,15 @@ class TaskRegistry:
     def is_initialized(self):
         return self._current_task is not None and len(self.tasks)
 
-    def save_state(self):
-        out = {task_name: task.__dict__() for task_name, task in self.tasks.items()}
+    def save_state(self, light=True):
+        out = {task_name: str(task.path) for task_name, task in self.tasks.items()}
         with open(self.save_dir / "task_registry.json", "w") as file:
             json.dump(out, file)
+        if not light:
+            for t in self.tasks.values():
+                t.save_state()
+        elif self.is_initialized:
+            self.tasks[self._current_task].save_state(light=light)
 
     def load_state(self):
         if (self.save_dir / "task_registry.json").exists():
@@ -150,43 +204,98 @@ class TaskRegistry:
     def get_current_task_name(self):
         return self._current_task
 
-    def get_current_models(self):
+    def get_current_models(self, emb_filter=True):
         if not self.is_initialized:
             return {}
-        return self.tasks[self._current_task].models
+        models = self.tasks[self._current_task].models
+        if emb_filter:
+            return {k: v for k, v in models.items() if
+                    self.embstore_registry.get_current_store_name() == v.embstore_name}
+        return models
+
+    def validate_selection(self):
+        if self.is_initialized:
+            task = self.get_current_task()
+            if task.is_initialized:
+                if (task.get_current_model().embstore_name
+                        != self.embstore_registry.get_current_store_name()):
+                    self.get_current_task().choose_model()
 
     def add_task(self, tags, mode: TASK_MULTICLASS_MODES = "empty_valid"):
         if not tags or mode not in self.get_task_modes():
             raise RuntimeError(f"Invalid tags {tags} or mode {mode}")
         tags = sorted(tags)
+        for tag in tags:  # can't create overlapping tasks for it will be impossible to merge
+            for task_name, task in self.tasks.items():
+                if tag in task.categories:
+                    raise RuntimeError(f"Tag {tag} already used in {task_name}")
+
         task_name = "_".join(tags)
         if mode == "empty_valid" or len(tags) == 1:
             task_name += "_empty"
         if task_name in self.tasks:
             return False
-        self.tasks[task_name] = Task(tags, multiclass_mode=mode)
-        self.save_state()
+        task_path = self._get_task_path(task_name)
+        self.tasks[task_name] = Task(tags, task_path, multiclass_mode=mode)
         self.choose_task(task_name)
+        self.save_state()
         return task_name
 
-    def get_model_path(self, task_name: str, model_name: str):
+    def _get_model_path(self, task_name: str, model_name: str):
         for ch in " /\\|,.?!@#$%^&*;:'\"+=":
             task_name = task_name.replace(ch, "_")
             model_name = model_name.replace(ch, "_")
         return self.save_dir / ".model_store" / task_name / f"{model_name}.pkl"
 
+    def _get_task_path(self, task_name: str):
+        for ch in " /\\|,.?!@#$%^&*;:'\"+=":
+            task_name = task_name.replace(ch, "_")
+        return self.save_dir / ".task_store" / f"{task_name}.json"
+
     def add_model(self, model_name, model, params, framework):
         if not self.is_initialized:
             raise RuntimeError("Can not add model. Task is not selected")
-        model_obj = Model(model, params, framework, self.get_model_path(self._current_task, model_name))
+        if not self.embstore_registry.is_initialized:
+            raise RuntimeError("Can not add model. Embedding store is not selected")
+        model_obj = Model(model, params, framework,
+                          self.embstore_registry.get_current_store_name(),
+                          self._get_model_path(self._current_task, model_name))
         self.tasks[self._current_task].add_model(model_obj, model_name)
-        self.save_state()
 
-    def choose_task(self, task_name):
-        assert task_name in self.tasks
+    def delete_model(self):
+        if not self.is_initialized:
+            return
+        self.tasks[self._current_task].delete_model()
+
+    def fit_current_model(self):
+        model = self.get_current_task().get_current_model()
+        assert model.embstore_name == self.embstore_registry.get_current_store_name()
+
+    def choose_task(self, task_name=None):
+        assert task_name in self.tasks or task_name is None
         self._current_task = task_name
-        self.tasks[self._current_task].update_labels(self._all_samples, self._dataset)
+        if self.is_initialized:
+            self.tasks[self._current_task].update_labels(self._all_samples, self._dataset)
         print("task: ", self._current_task)
+
+    def update_current_task(self):
+        if self._current_task is None:
+            return
+        self.tasks[self._current_task].update_labels(self._all_samples, self._dataset)
+
+    def get_current_labels(self, as_dict=False):
+        if not self.is_initialized:
+            return None
+        if as_dict:
+            return self.get_current_task().labels_dict(self._all_samples)
+        return self.get_current_task().labels
+
+    def delete_task(self):
+        if self._current_task is None:
+            return
+        self.tasks.pop(self._current_task)
+        self._current_task = None
+        self.save_state()
 
     def get_samples(self):
         return self._all_samples
