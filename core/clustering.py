@@ -59,13 +59,20 @@ class Clustering:
         embs = np.concatenate(embs, axis=0)
         return available_samples, embs, labels
 
-    def update_labels(self):
+    def update_labels(self, use_predictions=False):
         if self._last_result is None:
             return
-        label_lookup = self.task_registry.get_current_labels(as_dict=True)
-        self._last_result.labels = [label_lookup[s] for s in self._last_result.filenames]
-        self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
-                                                               self._last_result.labels)
+        model = self.task_registry.get_current_model()
+        if use_predictions and model is not None:
+            label_lookup = model.get_predictions()
+            labels = [label_lookup.get(s, -1) for s in self._last_result.filenames]
+            self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
+                                                                   labels)
+        else:
+            label_lookup = self.task_registry.get_current_labels(as_dict=True)
+            self._last_result.labels = [label_lookup.get(s, -1) for s in self._last_result.filenames]
+            self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
+                                                                   self._last_result.labels)
 
     def cluster(self, pca_components=50, random_state=42, tsne=True):
         if not self.task_registry.is_initialized:

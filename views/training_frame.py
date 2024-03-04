@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from core.app import App
 
@@ -61,11 +62,12 @@ class TrainingFrame(ViewBase):
                                             values=list(self.app.task_registry.get_current_models()))
         self.model_selection.bind("<<ComboboxSelected>>",
                                   lambda x: (self.app.task_registry.get_current_task()
-                                  .choose_model(self.model_selection_var.get()),
+                                             .choose_model(self.model_selection_var.get()),
                                              self.show_model_info()))
         self.model_selection.grid(row=1, column=0)
         self.add_model_button = ttk.Button(self.task_selection_frame, text="Add model",
-                                           command=lambda: model_creation_popup(self.app, self.show_model_info))
+                                           command=lambda: model_creation_popup(self.app,
+                                                                                self.reload_comboboxes))
         self.add_model_button.grid(row=1, column=1)
 
         self.embedder_selection_var = tk.StringVar()
@@ -82,12 +84,13 @@ class TrainingFrame(ViewBase):
         self.model_preview_frame.grid(row=1, column=0)
 
         self.model_info = tk.Label(self.model_preview_frame)
-        self.model_info.grid(row=0, column=0)
+        self.model_info.grid(row=0, column=0, columnspan=2)
         self.parameter_tuning_frame = Frame(master=self.model_preview_frame, pack=True, name="parameter_tuning_frame")
-        self.parameter_tuning_frame.grid(row=1, column=0)
+        self.parameter_tuning_frame.grid(row=1, column=0, columnspan=2)
 
         self.parameter_add_select_var = tk.StringVar()
-        self.parameter_add_select = ttk.Combobox(self.model_preview_frame)
+        self.parameter_add_select = ttk.Combobox(self.model_preview_frame, textvariable=self.parameter_add_select_var)
+        self.parameter_add_select.grid(row=2, column=0, sticky="e")
         self.add_parameter_button = ttk.Button(self.model_preview_frame, text="Add parameter",
                                                command=self.add_parameter_widget)
         self.add_parameter_button.grid(row=2, column=1)
@@ -95,8 +98,12 @@ class TrainingFrame(ViewBase):
         # Other
         self.fit_button = ttk.Button(self.top_left_frame, text="Fit", command=self.fit_model)
         self.fit_button.grid(row=2, column=0)
+        self.message_box_var = tk.StringVar()
+        self.message_box = tk.Label(self.top_left_frame, textvariable=self.message_box_var)
+        self.message_box.grid(row=3, column=0)
 
         # on load
+        self._parameter_frames = {}
         self.reload_comboboxes()
 
     def reload_comboboxes(self):
@@ -114,28 +121,36 @@ class TrainingFrame(ViewBase):
             task = registry.get_current_task()
             if task.is_initialized:
                 self.model_selection.current(model_names.index(task.get_current_model_name()))
+            else:
+                self.model_selection_var.set("")
+        else:
+            self.model_selection_var.set("")
+            self.task_selection_var.set("")
         if self.app.embstore_registry.is_initialized:
             self.embedder_selection.current(embedder_names.index(self.app.embstore_registry.get_current_store_name()))
+        else:
+            self.embedder_selection_var.set("")
+
         self.show_model_info()
 
     def show_model_info(self):
-        task = self.app.task_registry.get_current_task()
-        if not task.is_initialized:
+        model = self.app.task_registry.get_current_model()
+        for ch in list(self.parameter_tuning_frame.children.values()):
+            ch.destroy()
+        self._parameter_frames = {}
+        if model is None:
             # clear everything
             self.model_info.config(text="")
             self.parameter_add_select.config(values=[])
-            for ch in list(self.parameter_tuning_frame.children.values()):
-                ch.destroy()
-            self._parameter_frames = {}
         else:
             # populate everything
-            model = task.get_current_model()
             info = f"Model: {model.model} \nFramework: {model.framework} "
             self.model_info.config(text=info)
             signature = model.get_model_signature()
             values = []
             for name, default in signature.items():
-                self.add_parameter_widget(name, default)
+                if name in model.params:
+                    self.add_parameter_widget(name, model.params[name])
                 values.append(f"{name}={default}")
             self.parameter_add_select.config(values=values)
 
@@ -144,16 +159,19 @@ class TrainingFrame(ViewBase):
         widget[0].destroy()
 
     def add_parameter_widget(self, parameter_name=None, default=None):
+        if self.app.task_registry.get_current_model() is None:
+            return
         if parameter_name is None:
             value = self.parameter_add_select_var.get().split("=")
             parameter_name, default = value
-
+        if parameter_name in self._parameter_frames:
+            return
         frame = Frame(self.parameter_tuning_frame)
-        frame.pack(side="bottom")
+        frame.pack(anchor="w")
         text_var = tk.StringVar(value=str(default))
-        tk.Label(frame, text=parameter_name).grid(row=0, column=0)
+        tk.Label(frame, text=parameter_name, width=20).grid(row=0, column=0)
         ttk.Entry(frame, textvariable=text_var, ).grid(row=0, column=1)
-        ttk.Button(frame, text="X",
+        ttk.Button(frame, text="X", width=10,
                    command=lambda: self._destroy_param_widget(parameter_name)
                    ).grid(row=0, column=2)
         self._parameter_frames[parameter_name] = (frame, text_var)
@@ -167,10 +185,25 @@ class TrainingFrame(ViewBase):
         if value == "False":
             return False
         try:
-            return float(value)
+            value = float(value)
+            if value == float(int(value)):
+                return int(value)
+            return value
         except ValueError:
             return value
 
     def fit_model(self):
-        pass
+        self.message_box_var.set("")
+        try:
+            new_params = {}
+            for param_name, (_, var) in self._parameter_frames.items():
+                new_params[param_name] = self._parse_param(var.get())
 
+            model = self.app.task_registry.get_current_model()
+            if model is None:
+                return
+            model.params = new_params
+            res = self.app.task_registry.fit_current_model()
+            self.message_box_var.set(f"Completed: {res}")
+        except Exception as e:
+            self.message_box_var.set(f"Error: {e}")

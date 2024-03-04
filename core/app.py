@@ -15,7 +15,7 @@ from core.embedding import EmbeddingStoreRegistry
 from core.task import TaskRegistry
 from core.clustering import Clustering
 from views import *
-from views.utils import Frame, task_creation_popup, BindTk
+from views.utils import Frame, task_creation_popup, BindTk, model_creation_popup
 from config import *
 
 
@@ -420,7 +420,7 @@ class App:
                              .choose_model(model_selection_var.get()))
         model_selection.grid(row=1, column=0)
         add_model_button = ttk.Button(task_selection_frame, text="Add model",
-                                      command=lambda: self.switch_to_view(self.views.training))
+                                      command=model_creation_popup(self, reload_comboboxes))
         add_model_button.grid(row=1, column=1)
         delete_model_button = ttk.Button(task_selection_frame,
                                          text="Delete model",
@@ -573,7 +573,8 @@ class App:
 
             for model_name in model_names:
                 model = task.models[model_name]
-                values = (model_name, str(model.model), str(model.params), model.embstore_name, model.framework)
+                values = (model_name, str(model.model).split(".")[-1].strip(">'"),
+                          str(model.params), model.embstore_name, model.framework)
                 model_selection.insert("", "end", values[0], text=values[0],
                                        values=values[1:])
 

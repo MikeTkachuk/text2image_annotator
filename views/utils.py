@@ -1,9 +1,15 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from core.app import App
+
 from pathlib import Path
 from tkinter import ttk, Frame as FrameBase
 import tkinter as tk
 import PIL
 from PIL import Image, ImageDraw
 from config import DEBUG
+from core.model import Model
 
 
 class BindTk(tk.Tk):
@@ -99,7 +105,7 @@ def resize_pad_square(image_path, size):
     return square_image
 
 
-def task_creation_popup(app, callback):
+def task_creation_popup(app: App, callback):
     window = tk.Toplevel(master=app.master, name="task_creation_popup")
     window.geometry("500x500")
     window.title("New task")
@@ -132,13 +138,8 @@ def task_creation_popup(app, callback):
         try:
             if any([tag_choice.get_children(t) for t in tag_choice.selection()]):
                 raise RuntimeError("Selected non-leaf nodes")
-            result = app.task_registry.add_task(tag_choice.selection(), task_mode_var.get())
-            if result:
-                callback()
-            else:
-                error_label.config(text="This task already exists")
-                error_label.update()
-                return
+            app.task_registry.add_task(tag_choice.selection(), task_mode_var.get())
+            callback()
         except RuntimeError as e:
             error_label.config(text=str(e))
             error_label.update()
@@ -149,46 +150,28 @@ def task_creation_popup(app, callback):
     create_button.pack()
 
 
-def model_creation_popup(app, callback):
-    window = tk.Toplevel(master=app.master, name="task_creation_popup")
+def model_creation_popup(app: App, callback):
+    window = tk.Toplevel(master=app.master, name="model_creation_popup")
     window.geometry("500x500")
-    window.title("New task")
+    window.title("New model")
 
-    tag_select_frame = Frame(window, name="tag_select_frame")
-    tag_select_frame.pack()
-    tag_scrollbar = ttk.Scrollbar(tag_select_frame, orient="vertical")
-    tag_choice = ttk.Treeview(tag_select_frame, height=15,
-                              yscrollcommand=tag_scrollbar.set, selectmode="extended",
-                              )
-    tag_choice.column("#0", width=210)
-    tag_choice.heading("#0", text="Name")
-    tag_scrollbar.config(command=tag_choice.yview)
-    tag_scrollbar.grid(row=0, column=1, sticky="nsw")
-    tag_choice.grid(row=0, column=0, sticky="w")
-
-    task_mode_var = tk.StringVar()
-    task_mode_var.set(app.task_registry.get_task_modes()[0])
-    task_mode_selection = ttk.OptionMenu(window, task_mode_var, app.task_registry.get_task_modes()[0],
-                                         *app.task_registry.get_task_modes())
-    task_mode_selection.pack()
-
-    for tag, tag_path, _ in zip(*app.search_tags("")):
-        put_node(tag_choice, tag_path, tag)
+    model_name_var = tk.StringVar()
+    model_name_var.set(f"model_{len(app.task_registry.get_current_models(False))}")
+    model_name_entry = ttk.Entry(window, textvariable=model_name_var)
+    model_name_entry.selection_range(0, "end")
+    model_name_entry.pack()
+    model_template_var = tk.StringVar()
+    templates = list(Model.get_templates())
+    model_template_selection = ttk.OptionMenu(window, model_template_var, templates[0], *templates)
+    model_template_selection.pack()
 
     error_label = tk.Label(window, text="")
     error_label.pack()
 
     def closure(event=None):
         try:
-            if any([tag_choice.get_children(t) for t in tag_choice.selection()]):
-                raise RuntimeError("Selected non-leaf nodes")
-            result = app.task_registry.add_task(tag_choice.selection(), task_mode_var.get())
-            if result:
-                callback()
-            else:
-                error_label.config(text="This task already exists")
-                error_label.update()
-                return
+            app.task_registry.add_model(model_name_var.get(), model_template_var.get())
+            callback()
         except RuntimeError as e:
             error_label.config(text=str(e))
             error_label.update()

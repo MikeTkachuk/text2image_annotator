@@ -33,9 +33,10 @@ class ClusteringFrame(ViewBase):
 
         def ask_cursor_size():
             cursor_size = simpledialog.askfloat(title="Set #neighbors", prompt="Values < 1 are radius based",
-                                                     initialvalue=self.cursor_size)
+                                                initialvalue=self.cursor_size)
             if cursor_size and cursor_size > 0:
                 self.cursor_size = cursor_size
+
         tools.add_command(label="Set cursor size", command=ask_cursor_size)
         return tools
 
@@ -73,19 +74,24 @@ class ClusteringFrame(ViewBase):
         self.model_selection = ttk.Combobox(self.task_selection_frame, textvariable=self.model_selection_var,
                                             values=list(self.app.task_registry.get_current_models()))
         self.model_selection.bind("<<ComboboxSelected>>",
-                                  lambda x: self.app.task_registry.get_current_task()
-                                  .choose_model(self.model_selection_var.get()))
+                                  lambda x: (self.app.task_registry.get_current_task()
+                                             .choose_model(self.model_selection_var.get()), self.update_labels()))
         self.model_selection.grid(row=1, column=0)
-        self.add_model_button = ttk.Button(self.task_selection_frame, text="Add model",
-                                           command=lambda: self.app.switch_to_view(self.app.views.training))
-        self.add_model_button.grid(row=1, column=1)
+        # self.add_model_button = ttk.Button(self.task_selection_frame, text="Add model",
+        #                                    command=lambda: self.app.switch_to_view(self.app.views.training))
+        # self.add_model_button.grid(row=1, column=1)
+        self.show_predictions_var = tk.BooleanVar()
+        self.show_predictions_checkbox = ttk.Checkbutton(self.task_selection_frame, text="Show predictions",
+                                                         variable=self.show_predictions_var, command=self.update_labels)
+        self.show_predictions_checkbox.grid(row=1, column=1)
 
         self.embedder_selection_var = tk.StringVar()
         self.embedder_selection = ttk.Combobox(self.task_selection_frame, textvariable=self.embedder_selection_var,
                                                values=list(self.app.embstore_registry.stores))
         self.embedder_selection.bind("<<ComboboxSelected>>",
-                                     lambda x: self.app.embstore_registry.choose_store(
-                                         self.embedder_selection_var.get()))
+                                     lambda x: (self.app.embstore_registry.choose_store(
+                                         self.embedder_selection_var.get()),
+                                                self.reload_comboboxes()))
         self.embedder_selection.grid(row=0, column=2, rowspan=2, padx=5)
 
         # Clustering scatter
@@ -112,11 +118,13 @@ class ClusteringFrame(ViewBase):
         self.neighbor_scrollbar = ttk.Scrollbar(self.neighbor_list_frame, orient="vertical")
         self.neighbor_choice = ttk.Treeview(self.neighbor_list_frame, height=25 if not DEBUG else 2,
                                             yscrollcommand=self.neighbor_scrollbar.set, selectmode="browse",
-                                            columns=("Class",))
+                                            columns=("Class", "Pred"))
         self.neighbor_choice.column("#0", width=50)
         self.neighbor_choice.heading("#0", text="Name")
         self.neighbor_choice.column("Class", width=100)
         self.neighbor_choice.heading("Class", text="Class")
+        self.neighbor_choice.column("Pred", width=100)
+        self.neighbor_choice.heading("Pred", text="Pred")
         self.neighbor_scrollbar.config(command=self.neighbor_choice.yview)
         self.neighbor_scrollbar.grid(row=0, column=1, sticky="nsw")
         self.neighbor_choice.grid(row=0, column=0, sticky="w")
@@ -141,7 +149,7 @@ class ClusteringFrame(ViewBase):
             selection_meta[2] = new_label
             self.item_preview_frame.children["preview_label"].config(text=f"<  {new_label}  >")
             self.neighbor_choice.set(selection, column="Class", value=new_label)
-            self._reload_next_nn = True
+            self._reload_next_nn = not self.show_predictions_var.get()
             self.master.update()
 
         self.master.bind("<Right>", lambda x: update_label(), user=True)
@@ -166,8 +174,16 @@ class ClusteringFrame(ViewBase):
             task = registry.get_current_task()
             if task.is_initialized:
                 self.model_selection.current(model_names.index(task.get_current_model_name()))
+            else:
+                self.model_selection_var.set("")
+        else:
+            self.model_selection_var.set("")
+            self.task_selection_var.set("")
         if self.app.embstore_registry.is_initialized:
             self.embedder_selection.current(embedder_names.index(self.app.embstore_registry.get_current_store_name()))
+        else:
+            self.embedder_selection_var.set("")
+        self.update_labels()
 
     def show_clustering_result(self):
         img = self.app.clustering.get_base_plot()
@@ -188,11 +204,16 @@ class ClusteringFrame(ViewBase):
         self.app.clustering.cluster()
         self.show_clustering_result()
 
+    def update_labels(self, idle=False):
+        self.app.task_registry.update_current_task()
+        self.app.clustering.update_labels(self.show_predictions_var.get())
+        if not idle:
+            self.show_clustering_result()
+
     def populate_neighbors(self, event):
         if self._reload_next_nn:
             self._reload_next_nn = False
-            self.app.task_registry.update_current_task()
-            self.app.clustering.update_labels()
+            self.update_labels(idle=True)
         out = self.app.clustering.get_nearest_neighbors(event.x, event.y, self.cursor_size)
         if out is None:
             return
@@ -203,12 +224,23 @@ class ClusteringFrame(ViewBase):
         for item in self.neighbor_choice.get_children():
             self.neighbor_choice.delete(item)
         self._selection_data = {}
+        model = self.app.task_registry.get_current_model()
+        task = self.app.task_registry.get_current_task()
+        if model is None:
+            predictions = {}
+        else:
+            predictions = model.get_predictions(filenames)
         for i, (id_, filename, class_name) in enumerate(zip(ids, filenames, class_names)):
             self._selection_data[i] = [id_, filename, class_name]
-            self.neighbor_choice.insert("", "end", str(i), text=str(i), values=(class_name,))
-        self.neighbor_choice.focus_set()
-        self.neighbor_choice.selection_set("0")
-        self.neighbor_choice.focus("0")
+            pred_name = predictions.get(filename)
+            if pred_name is not None:
+                pred_name = task.label_name(pred_name)
+            self.neighbor_choice.insert("", "end", str(i), text=str(i),
+                                        values=(class_name, pred_name))
+        if len(ids):
+            self.neighbor_choice.focus_set()
+            self.neighbor_choice.selection_set("0")
+            self.neighbor_choice.focus("0")
         self.preview_neighbor()
 
     def preview_neighbor(self):
@@ -231,7 +263,15 @@ class ClusteringFrame(ViewBase):
         img_label.grid(row=0, column=0)
 
         tk.Label(self.item_preview_frame, text=f"<  {selected_meta[2]}  >", name="preview_label").grid(row=1, column=0)
+        if self.show_predictions_var.get():
+            model = self.app.task_registry.get_current_model()
+            task = self.app.task_registry.get_current_task()
+            prediction = None if model is None \
+                else task.label_name(model.get_predictions([selected_meta[1]])[selected_meta[1]])
+
+            tk.Label(self.item_preview_frame,
+                     text=f"Prediction: {prediction}", name="preview_prediction_label").grid(row=2, column=0)
         ttk.Button(self.item_preview_frame,
                    text="Open in annotation tool",
                    command=lambda: (self.app.go_to_image(selected_meta[1]),
-                                    self.app.switch_to_view(self.app.views.main))).grid(row=2, column=0)
+                                    self.app.switch_to_view(self.app.views.main))).grid(row=3, column=0)

@@ -234,7 +234,7 @@ class TaskRegistry:
         if mode == "empty_valid" or len(tags) == 1:
             task_name += "_empty"
         if task_name in self.tasks:
-            return False
+            raise RuntimeError("This task already exists")
         task_path = self._get_task_path(task_name)
         self.tasks[task_name] = Task(tags, task_path, multiclass_mode=mode)
         self.choose_task(task_name)
@@ -252,24 +252,39 @@ class TaskRegistry:
             task_name = task_name.replace(ch, "_")
         return self.save_dir / ".task_store" / f"{task_name}.json"
 
-    def add_model(self, model_name, model, params, framework):
+    def add_model(self, model_name: str, template_name: str):
         if not self.is_initialized:
             raise RuntimeError("Can not add model. Task is not selected")
         if not self.embstore_registry.is_initialized:
             raise RuntimeError("Can not add model. Embedding store is not selected")
-        model_obj = Model(model, params, framework,
-                          self.embstore_registry.get_current_store_name(),
-                          self._get_model_path(self._current_task, model_name))
-        self.tasks[self._current_task].add_model(model_obj, model_name)
+        model = Model.from_template(template_name,
+                                    self.embstore_registry.get_current_store_name(),
+                                    self._get_model_path(self._current_task, model_name))
+        self.tasks[self._current_task].add_model(model, model_name)
+        self.tasks[self._current_task].choose_model(model_name)
 
     def delete_model(self):
         if not self.is_initialized:
             return
         self.tasks[self._current_task].delete_model()
 
-    def fit_current_model(self):
+    def get_current_model(self):
+        if not self.is_initialized:
+            return None
         model = self.get_current_task().get_current_model()
+        return model
+
+    def fit_current_model(self):
+        model = self.get_current_model()
         assert model.embstore_name == self.embstore_registry.get_current_store_name()
+        dataset = {}
+        for sample, label in zip(self.get_samples(), self.get_current_labels()):
+            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True, normalize=True)
+            if emb is not None:
+                dataset[sample] = (emb.cpu().numpy(), label)
+        res = model.fit(dataset)
+        self.get_current_task().save_state()
+        return res
 
     def choose_task(self, task_name=None):
         assert task_name in self.tasks or task_name is None
