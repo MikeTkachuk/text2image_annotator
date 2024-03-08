@@ -24,6 +24,7 @@ class ClusteringFrame(ViewBase):
         self.cursor_size = 0.05
         self._selection_data = None
         self._reload_next_nn = False
+        self._filter = {}
 
     def render(self):
         self._main_setup()
@@ -38,6 +39,46 @@ class ClusteringFrame(ViewBase):
                 self.cursor_size = cursor_size
 
         tools.add_command(label="Set cursor size", command=ask_cursor_size)
+
+        def set_filter_conditions():
+            window = tk.Toplevel(self.master)
+            window.title("Filter selection")
+            class_filter = ttk.Treeview(window, selectmode="extended")
+            class_filter.heading("#0", text="Class Filter")
+            class_filter.pack()
+            for _, class_name in self.app.clustering.get_legend():
+                class_filter.insert("", "end", class_name, text=class_name)
+            if self._filter.get("class_name"):
+                class_filter.selection_set(self._filter["class_name"])
+
+            pred_filter = ttk.Treeview(window, selectmode="extended")
+            pred_filter.heading("#0", text="Prediction Filter")
+            pred_filter.pack()
+            model = self.app.task_registry.get_current_model()
+            if model is not None:
+                preds = [self.app.task_registry.get_current_task().label_name(p) for p in model.get_classes()]
+                for pred in sorted(preds):
+                    pred_filter.insert("", "end", pred, text=pred)
+            if self._filter.get("prediction"):
+                pred_filter.selection_set(self._filter["prediction"])
+
+            special_modes = ["All", "Equal", "Not Equal"]
+            special_var = tk.StringVar()
+            special = ttk.OptionMenu(window, special_var,
+                                     special_modes[special_modes.index(self._filter.get("special", "All"))],
+                                     *special_modes)
+            special.pack()
+
+            def closure():
+                self._filter["class_name"] = class_filter.selection()
+                self._filter["prediction"] = pred_filter.selection()
+                self._filter["special"] = special_var.get()
+                window.destroy()
+
+            confirm = ttk.Button(window, text="Confirm", command=closure)
+            confirm.pack()
+
+        tools.add_command(label="Filter", command=set_filter_conditions)
         return tools
 
     def _main_setup(self):
@@ -235,13 +276,29 @@ class ClusteringFrame(ViewBase):
             pred_name = predictions.get(filename)
             if pred_name is not None:
                 pred_name = task.label_name(pred_name)
-            self.neighbor_choice.insert("", "end", str(i), text=str(i),
-                                        values=(class_name, pred_name))
-        if len(ids):
+            if self.filter_condition(class_name=class_name, prediction=pred_name):
+                self.neighbor_choice.insert("", "end", str(i), text=str(i),
+                                            values=(class_name, pred_name))
+        if len(self.neighbor_choice.get_children()):
             self.neighbor_choice.focus_set()
-            self.neighbor_choice.selection_set("0")
-            self.neighbor_choice.focus("0")
+            first_child = self.neighbor_choice.get_children()[0]
+            self.neighbor_choice.selection_set(first_child)
+            self.neighbor_choice.focus(first_child)
         self.preview_neighbor()
+
+    def filter_condition(self, class_name, prediction):
+        key = True
+        if self._filter.get("class_name"):
+            key = key and class_name in self._filter.get("class_name")
+        if self._filter.get("prediction"):
+            key = key and prediction in self._filter.get("prediction")
+        special_cond = self._filter.get("special")
+        if special_cond:
+            if special_cond == "Equal":
+                key = key and class_name == prediction
+            if special_cond == "Not Equal":
+                key = key and class_name != prediction
+        return key
 
     def preview_neighbor(self):
         for ch in list(self.item_preview_frame.children.values()):

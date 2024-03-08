@@ -102,3 +102,8 @@ class Model:
         if samples is None:
             return self._predictions
         return {s: self._predictions.get(s, -1) for s in samples}
+
+    def get_classes(self):
+        out = set(self._predictions.values())
+        out.add(-1)
+        return out
