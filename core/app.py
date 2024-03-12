@@ -77,7 +77,8 @@ class App:
         if image_dir is None:
             image_dir = filedialog.askdirectory(title="Select Folder")
         image_dir = Path(image_dir)
-        self._image_paths = [str(f) for f in image_dir.rglob("*") if f.suffix in [".jpeg", ".jpg", ".png"]]
+        self._image_paths = [str(f) for f in image_dir.rglob("*")
+                             if f.suffix in [".jpeg", ".jpg", ".png"] and f.stat().st_size]
         self._current_index = 0
         self.create_session_config(image_dir)
         self.current_view.render()
@@ -212,6 +213,13 @@ class App:
 
     def get_current_image_path(self):
         return self._image_paths[self._current_index]
+
+    def get_active_samples(self, tasks=True):
+        samples = set(self.session_config["data"].keys())
+        if tasks:
+            for task in self.task_registry.tasks.values():
+                samples.update(task.user_override.keys())
+        return list(samples)
 
     def get_stats(self):
         return f"Progress: {len(self.session_config['data'])}/{len(self._image_paths)}\n" \
@@ -440,8 +448,9 @@ class App:
         embedder_selection = ttk.Combobox(emb_info_frame, textvariable=embedder_selection_var,
                                           values=embedder_names)
         embedder_selection.bind("<<ComboboxSelected>>",
-                                lambda x: self.embstore_registry.choose_store(
-                                    embedder_selection_var.get()))
+                                lambda x: (self.embstore_registry.choose_store(
+                                    embedder_selection_var.get()),
+                                           reload_status()))
         embedder_selection.current(embedder_names.index(self.embstore_registry.get_current_store_name()))
         embedder_selection.pack(side="left")
 
@@ -452,8 +461,9 @@ class App:
                 )
                 error_label.config(text="")
                 error_label.update()
+                reload_status()
             except RuntimeError as e:
-                error_label.config(text="This task already exists")
+                error_label.config(text="This model already exists")
                 error_label.update()
 
         add_by_name = ttk.Button(emb_info_frame, text="Add model",
@@ -469,6 +479,7 @@ class App:
                 )
                 error_label.config(text="")
                 error_label.update()
+                reload_status()
             except RuntimeError as e:
                 error_label.config(text="This task already exists")
                 error_label.update()
@@ -491,30 +502,42 @@ class App:
         do_shuffle = ttk.Checkbutton(precompute_frame, variable=do_shuffle_var)
         do_shuffle.pack(side="left")
 
+        batch_size_frame = Frame(window, name="batch_size_frame", pack=True)
+        batch_size_frame.pack()
+        tk.Label(batch_size_frame, text="Batch size:").pack(side="left")
+        batch_size_var = tk.StringVar()
+        batch_size_var.set("1")
+        batch_size_entry = ttk.Entry(batch_size_frame, textvariable=batch_size_var)
+        batch_size_entry.pack(side="left")
+
         def get_precomputed_status():
             store = self.embstore_registry.get_current_store()
             statuses = []
             for s in self._image_paths:
-                statuses.append(store.get_image_embedding(s, load_only=True) is not None)
+                statuses.append(store.embedding_exists(s))
             return statuses
 
-        def update_info_label():
+        def reload_status():
+            embedder_selection.current(embedder_names.index(self.embstore_registry.get_current_store_name()))
             statuses = get_precomputed_status()
             info_label.config(text=f" Precomputed: {sum(statuses)}/{len(self._image_paths)}")
             info_label.update()
 
-        def run_precomputing():
+        def run_precomputing(sample_pool=None):
             store = self.embstore_registry.get_current_store()
-            selected = []
-            max_selected = int(precompute_count_var.get())
-            samples = list(self._image_paths)
-            if do_shuffle_var.get():
-                random.shuffle(samples)
-            for sample in samples:
-                if store.get_image_embedding(sample, load_only=True) is None:
-                    selected.append(sample)
-                if len(selected) >= max_selected:
-                    break
+            if sample_pool is None:
+                selected = []
+                max_selected = int(precompute_count_var.get())
+                samples = list(self._image_paths)
+                if do_shuffle_var.get():
+                    random.shuffle(samples)
+                for sample in samples:
+                    if not store.embedding_exists(sample):
+                        selected.append(sample)
+                    if len(selected) >= max_selected:
+                        break
+            else:
+                selected = sample_pool
 
             def callback(i):
                 try:  # try if not closed
@@ -525,21 +548,34 @@ class App:
                 # time.sleep(1)
 
             def target():
-                count = store.precompute(selected, callback)
+                count = store.precompute(selected, callback, batch_size=int(batch_size_var.get()))
                 try:  # try if not closed
                     message_label.config(text=f"#Errors: {len(selected) - count}")
                     message_label.update()
-                    update_info_label()
+                    reload_status()
                 except:
                     pass
 
             t = Thread(target=target)
             t.start()
 
-        run_button = ttk.Button(window, text="Run", command=run_precomputing)
-        run_button.pack()
+        run_button = ttk.Button(batch_size_frame, text="Run", command=run_precomputing)
+        run_button.pack(side="left")
 
-        update_info_label()
+        run_active_frame = Frame(window, name="run_active_frame", pack=True)
+        run_active_frame.pack(pady=10)
+        tk.Label(run_active_frame, text="Include tasks:").pack(side="left")
+        include_tasks_var = tk.BooleanVar()
+        include_tasks_var.set(True)
+        include_tasks = ttk.Checkbutton(run_active_frame, variable=include_tasks_var)
+        include_tasks.pack(side="left")
+        run_active_button = ttk.Button(run_active_frame, text="Precompute active",
+                                       command=lambda: run_precomputing(
+                                           self.get_active_samples(include_tasks_var.get())
+                                       )
+                                       )
+        run_active_button.pack(side="left")
+        reload_status()
 
         message_label = tk.Label(window, text="")
         message_label.pack()

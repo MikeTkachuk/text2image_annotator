@@ -74,6 +74,7 @@ class Clustering:
             self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
                                                                    self._last_result.labels)
 
+    # todo: cluster using model-selected features
     def cluster(self, pca_components=50, random_state=42, tsne=True):
         if not self.task_registry.is_initialized:
             return

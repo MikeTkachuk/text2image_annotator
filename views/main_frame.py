@@ -8,7 +8,7 @@ from views.view_base import ViewBase
 from config import *
 from views.utils import Frame, put_node, resize_pad_square
 
-
+# todo: open image in explorer
 class MainFrame(ViewBase):
     def __init__(self, app):
         self.app = app

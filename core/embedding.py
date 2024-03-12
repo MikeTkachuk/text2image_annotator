@@ -1,40 +1,45 @@
 import json
-import time
 from pathlib import Path
 from typing import Union, List, Dict
-from threading import Thread
 
 from PIL import Image
-import numpy as np
 import torch
-from transformers import CLIPModel, CLIPProcessor
+from transformers import CLIPModel, CLIPProcessor, ViTMAEForPreTraining, AutoImageProcessor
 
-MODEL_NAME = "openai/clip-vit-large-patch14"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def get_embedder(model_name=MODEL_NAME):
-    clip_model: CLIPModel = CLIPModel.from_pretrained(model_name, device_map=device)
-    clip_processor: CLIPProcessor = CLIPProcessor.from_pretrained(model_name)
+def get_embedder(model_name):
+    if "clip" in model_name:
+        clip_model: CLIPModel = CLIPModel.from_pretrained(model_name, device_map=device)
+        clip_model.eval()
+        clip_processor: CLIPProcessor = CLIPProcessor.from_pretrained(model_name)
 
-    def _embedder_func(obj):
-        if isinstance(obj, (list, tuple)):
-            element_instance = obj[0]
-        else:
-            element_instance = obj
-        if isinstance(element_instance, str):
-            inputs = clip_processor(text=obj, return_tensors="pt").to(device)
-            return clip_model.get_text_features(**inputs)
-        else:
+        def _img_func(obj):
             inputs = clip_processor(images=obj, return_tensors="pt").to(device)
             return clip_model.get_image_features(**inputs)
 
-    return _embedder_func
+        def _text_func(obj):
+            inputs = clip_processor(text=obj, return_tensors="pt").to(device)
+            return clip_model.get_text_features(**inputs)
+
+        return _img_func, _text_func
+    else:  # ViTMAE for now
+        img_model: ViTMAEForPreTraining = ViTMAEForPreTraining.from_pretrained(model_name, device_map=device)
+        img_model.eval()
+        img_model.config.mask_ratio = 0.0
+        img_processor = AutoImageProcessor.from_pretrained(model_name)
+
+        def _img_func(obj):
+            inputs = img_processor(images=obj, return_tensors="pt").to(device)
+            return img_model.vit(**inputs).last_hidden_state[:, 0]
+
+        return _img_func, None
 
 
 class EmbeddingStore:
-    def __init__(self, store_path, data_folder_path, model_name=MODEL_NAME, store_name=None):
+    def __init__(self, store_path, data_folder_path, model_name, store_name=None):
         if store_name is None:
             store_name = model_name
         self.store_name = store_name
@@ -71,8 +76,14 @@ class EmbeddingStore:
         return self._embedder
 
     def idle(self):
-        del self._embedder
-        self._embedder = None
+        if self._embedder is not None:
+            del self._embedder
+            self._embedder = None
+
+    def embedding_exists(self, abs_path):
+        rel_path = Path(abs_path).relative_to(self.data_folder_path)
+        abs_emb_path = self.store_path / rel_path.parent / (rel_path.stem + ".pt")
+        return abs_emb_path.exists()
 
     @torch.no_grad()
     def get_image_embedding(self, abs_path, load_only=False, normalize=False):
@@ -84,7 +95,7 @@ class EmbeddingStore:
             if load_only:
                 return None
             try:
-                embedding = self.embedder(Image.open(abs_path))
+                embedding = self.embedder[0](Image.open(abs_path).convert("RGB"))
                 abs_emb_path.parent.mkdir(parents=True, exist_ok=True)
                 torch.save(embedding, abs_emb_path)
             except Exception as e:
@@ -98,7 +109,9 @@ class EmbeddingStore:
     def add_tag(self, tag: Union[List[str], str]):
         if isinstance(tag, str):
             tag = [tag]
-        new_embeddings = self.embedder(tag)
+        if self.embedder[1] is None:
+            raise RuntimeError("Text embedder not available")
+        new_embeddings = self.embedder[1](tag)
         for i, t in enumerate(tag):
             self.tag_embeddings[t] = new_embeddings[i]
         torch.save(self.tag_embeddings, self.tag_embeddings_path)
@@ -122,13 +135,23 @@ class EmbeddingStore:
 
         return cosines.flatten().cpu().numpy().tolist()
 
-    def precompute(self, samples, callback=None):
+    def precompute(self, samples, callback=None, batch_size=1):
+        batched = [samples[i*batch_size:(i+1)*batch_size] for i in range(len(samples) // batch_size + 1)]
         count = 0
-        for i, sample in enumerate(samples):
-            if self.get_image_embedding(sample) is not None:
-                count += 1
+        for i, batch in enumerate(batched):
+            try:
+                embedding = self.embedder[0]([Image.open(sample).convert("RGB") for sample in batch])
+
+                for sample_id in range(len(batch)):
+                    rel_path = Path(batch[sample_id]).relative_to(self.data_folder_path)
+                    abs_emb_path = self.store_path / rel_path.parent / (rel_path.stem + ".pt")
+                    abs_emb_path.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save(embedding[[sample_id]], abs_emb_path)
+                count += len(batch)
+            except Exception as e:
+                print(e)
             if callback is not None:
-                callback(i)
+                callback(i*batch_size)
 
         return count
 

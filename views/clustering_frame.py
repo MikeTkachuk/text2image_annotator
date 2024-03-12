@@ -13,15 +13,15 @@ from views.utils import Frame, task_creation_popup, resize_pad_square
 from config import *
 
 
-# todo: filter by label during NN selection (turn legend into buttons),
-#
+# todo: add clustering config to include algo, dim, use model emb (what layer if so),
+#  emb preproc,
 
 class ClusteringFrame(ViewBase):
     def __init__(self, app: App):
         self.app = app
         self.master = self.app.master
 
-        self.cursor_size = 0.05
+        self.cursor_size = 0.025
         self._selection_data = None
         self._reload_next_nn = False
         self._filter = {}
@@ -43,7 +43,7 @@ class ClusteringFrame(ViewBase):
         def set_filter_conditions():
             window = tk.Toplevel(self.master)
             window.title("Filter selection")
-            class_filter = ttk.Treeview(window, selectmode="extended")
+            class_filter = ttk.Treeview(window, selectmode="extended", height=5)
             class_filter.heading("#0", text="Class Filter")
             class_filter.pack()
             for _, class_name in self.app.clustering.get_legend():
@@ -51,7 +51,7 @@ class ClusteringFrame(ViewBase):
             if self._filter.get("class_name"):
                 class_filter.selection_set(self._filter["class_name"])
 
-            pred_filter = ttk.Treeview(window, selectmode="extended")
+            pred_filter = ttk.Treeview(window, selectmode="extended", height=5)
             pred_filter.heading("#0", text="Prediction Filter")
             pred_filter.pack()
             model = self.app.task_registry.get_current_model()
