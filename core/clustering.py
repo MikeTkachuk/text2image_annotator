@@ -45,18 +45,26 @@ class Clustering:
 
         self._last_result: ClusteringResult = None
 
-    def get_available_embeddings(self):
+    def get_available_embeddings(self, use_model_features=False, layer=-2):
         embs = []
         available_samples = []
         labels = []
         self.task_registry.update_current_task()
         for sample, label in zip(self.samples, self.task_registry.get_current_labels()):
-            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True, normalize=True)
+            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True)
             if emb is not None:
                 embs.append(emb.cpu().numpy())
                 available_samples.append(sample)
                 labels.append(label)
         embs = np.concatenate(embs, axis=0)
+        if use_model_features:
+            model = self.task_registry.get_current_model()
+            if model is not None:
+                try:
+                    embs = model.get_activations(embs, layer)
+                except RuntimeError as e:
+                    raise e
+                    print(e)
         return available_samples, embs, labels
 
     def update_labels(self, use_predictions=False):
@@ -74,12 +82,23 @@ class Clustering:
             self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
                                                                    self._last_result.labels)
 
-    # todo: cluster using model-selected features
-    def cluster(self, pca_components=50, random_state=42, tsne=True):
+    def cluster(self,
+                pca_components=50,
+                random_state=42,
+                tsne=True,
+                use_model_features=True,
+                layer=-2,
+                ):
         if not self.task_registry.is_initialized:
             return
-        samples, embs, labels = self.get_available_embeddings()
-        pca_reduced = PCA(n_components=pca_components, random_state=random_state, svd_solver="full").fit_transform(embs)
+        if not self.embstore_registry.is_initialized:
+            return
+        samples, embs, labels = self.get_available_embeddings(use_model_features, layer=layer)
+        if pca_components < embs.shape[-1]:
+            pca_reduced = PCA(n_components=pca_components, random_state=random_state, svd_solver="full").fit_transform(embs)
+        else:
+            pca_reduced = embs
+
         if TSNE_CUDA_AVAILABLE and tsne:
             out = TSNE(random_seed=random_state).fit_transform(pca_reduced)
         else:

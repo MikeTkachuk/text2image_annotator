@@ -4,8 +4,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from core.app import App
 
+from threading import Thread
+
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, scrolledtext
 
 from views.view_base import ViewBase
 from views.utils import Frame, task_creation_popup, model_creation_popup
@@ -17,6 +19,7 @@ class TrainingFrame(ViewBase):
         self.master = self.app.master
 
         self._parameter_frames = {}
+        self._logs = ""
 
     def render(self):
         self._main_setup()
@@ -36,8 +39,6 @@ class TrainingFrame(ViewBase):
         # Toolbar
         self.toolbar = self.get_toolbar(self.master)
 
-        # todo: task -> model selector, add model dialogue (framework, parameters, model type, model templates),
-        #   data split dialogue, "train" button, metrics info, parameter tuning
         # Task, model, and embedder selection
         self.task_selection_frame = Frame(master=self.top_left_frame, name="task_selection_frame")
         self.task_selection_frame.grid(row=0, column=0)
@@ -95,15 +96,20 @@ class TrainingFrame(ViewBase):
                                                command=self.add_parameter_widget)
         self.add_parameter_button.grid(row=2, column=1)
 
-        # Other
         self.fit_button = ttk.Button(self.top_left_frame, text="Fit", command=self.fit_model)
         self.fit_button.grid(row=2, column=0)
-        self.message_box_var = tk.StringVar()
-        self.message_box = tk.Label(self.top_left_frame, textvariable=self.message_box_var)
-        self.message_box.grid(row=3, column=0)
+
+        # Other
+        self.right_frame = Frame(self.frame_master, name="right_frame")
+        self.right_frame.grid(row=0, column=1)
+
+        self.log_frame = Frame(self.right_frame, name="log_frame")
+        self.log_frame.grid(row=0, column=0)
+        self.log = scrolledtext.ScrolledText(self.log_frame, height=30, state="disabled")
+        self.log.grid(row=0, column=0)
 
         # on load
-        self._parameter_frames = {}
+        self.log_update(self._logs, overwrite=True)
         self.reload_comboboxes()
 
     def reload_comboboxes(self):
@@ -192,8 +198,25 @@ class TrainingFrame(ViewBase):
         except ValueError:
             return value
 
+    def log_update(self, value: str, end="\n", overwrite=False):
+        value = value + end
+        self._logs = value if overwrite else self._logs + value
+
+        try:
+            self.log.configure(state='normal')
+            if overwrite:
+                self.log.delete(1.0, "end")
+                self.log.insert("end", self._logs)
+            else:
+                self.log.insert("end", value)
+            self.log.configure(state='disabled')
+            # Autoscroll to the bottom
+            self.log.yview("end")
+        except tk.TclError as e:
+            pass
+
     def fit_model(self):
-        self.message_box_var.set("")
+        self.log_update("", end="", overwrite=True)
         try:
             new_params = {}
             for param_name, (_, var) in self._parameter_frames.items():
@@ -203,7 +226,14 @@ class TrainingFrame(ViewBase):
             if model is None:
                 return
             model.params = new_params
-            res = self.app.task_registry.fit_current_model()
-            self.message_box_var.set(f"Completed: {res}")
+
+            def callback(val, end="\n"):
+                self.log_update(val, end=end, overwrite=False)
+                print(val, end=end)
+
+            thread = Thread(target=self.app.task_registry.fit_current_model, args=(callback,))
+            thread.start()
         except Exception as e:
-            self.message_box_var.set(f"Error: {e}")
+            import traceback
+            traceback.print_exception(e)
+            self.log_update(f"Error: {e}")

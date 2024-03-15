@@ -1,10 +1,12 @@
 from __future__ import annotations
+
+import json
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from core.app import App
 
 from pathlib import Path
-from tkinter import ttk, Frame as FrameBase
+from tkinter import ttk, Frame as FrameBase, filedialog
 import tkinter as tk
 import PIL
 from PIL import Image, ImageDraw
@@ -180,3 +182,11 @@ def model_creation_popup(app: App, callback):
 
     create_button = ttk.Button(window, text="Confirm", command=closure)
     create_button.pack()
+
+
+def save_json_prompt(obj, parent=None):
+    with open(filedialog.asksaveasfilename(confirmoverwrite=True,
+                                           initialfile="data.json",
+                                           defaultextension=".json",
+                                           parent=parent), "w") as file:
+        json.dump(obj, file)

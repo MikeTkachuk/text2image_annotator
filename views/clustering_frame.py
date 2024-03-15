@@ -14,7 +14,11 @@ from config import *
 
 
 # todo: add clustering config to include algo, dim, use model emb (what layer if so),
-#  emb preproc,
+#  emb preproc (norm, etc),
+# todo: filter by data split
+# todo: option to hide filtered from the plot or highlight them
+# todo: filter by aug and source id
+# todo: since too much filter tasks, introduce datapoint flags
 
 class ClusteringFrame(ViewBase):
     def __init__(self, app: App):
@@ -25,6 +29,7 @@ class ClusteringFrame(ViewBase):
         self._selection_data = None
         self._reload_next_nn = False
         self._filter = {}
+        self._cluster_params = {}
 
     def render(self):
         self._main_setup()
@@ -79,6 +84,48 @@ class ClusteringFrame(ViewBase):
             confirm.pack()
 
         tools.add_command(label="Filter", command=set_filter_conditions)
+
+        def set_clustering_options():
+            window = tk.Toplevel(self.master)
+            window.title("Clustering options")
+            pca_components_frame = Frame(window, name="pca_components_frame", pack=True)
+            pca_components_frame.pack()
+            tk.Label(pca_components_frame, text="PCA reduction components:").pack(side="left")
+            pca_components_var = tk.StringVar()
+            pca_components_var.set("50")
+            ttk.Entry(pca_components_frame, textvariable=pca_components_var).pack(side="left")
+
+            tsne_frame = Frame(window, name="tsne_frame", pack=True)
+            tsne_frame.pack()
+            tk.Label(tsne_frame, text="Use TSNE:").pack(side="left")
+            tsne_var = tk.BooleanVar(value=True)
+            ttk.Checkbutton(tsne_frame, variable=tsne_var).pack(side="left")
+
+            use_model_frame = Frame(window, name="use_model_frame", pack=True)
+            use_model_frame.pack()
+            tk.Label(use_model_frame, text="Use model activations:").pack(side="left")
+            use_model_var = tk.BooleanVar(value=True)
+            ttk.Checkbutton(use_model_frame, variable=use_model_var).pack(side="left")
+
+            layer_frame = Frame(window, name="layer_frame", pack=True)
+            layer_frame.pack()
+            tk.Label(layer_frame, text="Model layer index:").pack(side="left")
+            layer_var = tk.StringVar()
+            layer_var.set("-2")
+            ttk.Entry(layer_frame, textvariable=layer_var).pack(side="left")
+
+            def closure():
+                self._cluster_params = {
+                    "pca_components": int(pca_components_var.get()),
+                    "tsne": tsne_var.get(),
+                    "use_model_features": use_model_var.get(),
+                    "layer": int(layer_var.get())
+                }
+                window.destroy()
+
+            ttk.Button(window, text="Confirm", command=closure).pack()
+
+        tools.add_command(label="Clustering options", command=set_clustering_options)
         return tools
 
     def _main_setup(self):
@@ -242,7 +289,7 @@ class ClusteringFrame(ViewBase):
             label.grid(row=0, column=i)
 
     def compute_clustering(self):
-        self.app.clustering.cluster()
+        self.app.clustering.cluster(**self._cluster_params)
         self.show_clustering_result()
 
     def update_labels(self, idle=False):

@@ -1,6 +1,9 @@
 import json
+import shutil
 from pathlib import Path
 from typing import Literal, Dict, get_args
+
+from sklearn.model_selection import train_test_split
 
 from core.model import Model
 from core.embedding import EmbeddingStoreRegistry
@@ -8,8 +11,7 @@ from core.embedding import EmbeddingStoreRegistry
 TASK_MULTICLASS_MODES = Literal["empty_valid", "empty_invalid"]
 
 
-# todo: add task description
-
+# todo: optimize labels to be a (maybe ordered) dict
 class Task:
     def __init__(self, categories, task_path, multiclass_mode: TASK_MULTICLASS_MODES = "empty_valid"):
         self.multiclass_mode: TASK_MULTICLASS_MODES = multiclass_mode
@@ -20,8 +22,10 @@ class Task:
         self.labels = []
         self.user_override = {}
         self.models: Dict[str, Model] = {}
+        self.description = ""
+        self.validation_samples = []
+
         self._current_model: str = None
-        self._last_load = None
 
     @property
     def is_initialized(self):
@@ -107,40 +111,59 @@ class Task:
         except IndexError:
             raise RuntimeError("Can not override with invalid label")
         self.user_override[sample] = label
-        self.save_state(light=True)
+        self.save_state()
+
+    def update_description(self, description: str):
+        self.description = description
+        self.save_state()
+
+    def update_split(self, validation_split: list):
+        self.validation_samples = validation_split
+        self.save_state()
 
     def add_model(self, model: Model, model_name: str):
         if model_name in self.models:
             return False
         self.models[model_name] = model
+        model.save()
         self.save_state()
 
-    def save_state(self, light=False):
+    def __dict__(self):
         out = {"models": {},
                "multiclass_mode": self.multiclass_mode,
                "categories": self.categories,
-               "user_override": self.user_override
+               "user_override": self.user_override,
+               "description": self.description,
+               "validation_samples": self.validation_samples
                }
-        if not light or self._last_load is None:
-            for model_name in self.models:
-                model_dict = self.models[model_name].__dict__()
-                out["models"][model_name] = model_dict
-        else:
-            out["models"] = self._last_load["models"]
-        self._last_load = out
+        for model_name, model in self.models.items():
+            out["models"][model_name] = model.__dict__()
+        return out
+
+    def save_state(self):
+        out = {"models": {},
+               "multiclass_mode": self.multiclass_mode,
+               "categories": self.categories,
+               "user_override": self.user_override,
+               "description": self.description,
+               "validation_samples": self.validation_samples
+               }
+        for model_name in self.models:
+            out["models"][model_name] = str(self.models[model_name].save_path)
+
         if not self.path.parent.exists():
             self.path.parent.mkdir(parents=True)
         with open(self.path, "w") as file:
             json.dump(out, file)
-        return out
 
     @classmethod
     def load(cls, path):
         with open(path) as file:
             data = json.load(file)
         task = Task(data["categories"], path, data["multiclass_mode"])
-        task._last_load = data
         task.user_override = data["user_override"]
+        task.description = data.get("description", "")
+        task.validation_samples = data.get("validation_samples", [])
         for model in data["models"]:
             task.add_model(Model.load(data["models"][model]), model)
         return task
@@ -151,10 +174,12 @@ class Task:
         print("model: ", self._current_model)
 
     def delete_model(self, model_name=None):
-        if self._current_model is None:
-            return
         if model_name is None:
             model_name = self._current_model
+        if model_name is None:
+            return
+        model = self.models[model_name]
+        shutil.rmtree(model.save_path)
         self.models.pop(model_name)
         if model_name == self._current_model:
             self._current_model = None
@@ -184,7 +209,7 @@ class TaskRegistry:
             for t in self.tasks.values():
                 t.save_state()
         elif self.is_initialized:
-            self.tasks[self._current_task].save_state(light=light)
+            self.tasks[self._current_task].save_state()
 
     def load_state(self):
         if (self.save_dir / "task_registry.json").exists():
@@ -245,7 +270,7 @@ class TaskRegistry:
         for ch in " /\\|,.?!@#$%^&*;:'\"+=":
             task_name = task_name.replace(ch, "_")
             model_name = model_name.replace(ch, "_")
-        return self.save_dir / ".model_store" / task_name / f"{model_name}.pkl"
+        return self.save_dir / ".model_store" / task_name / model_name
 
     def _get_task_path(self, task_name: str):
         for ch in " /\\|,.?!@#$%^&*;:'\"+=":
@@ -274,16 +299,40 @@ class TaskRegistry:
         model = self.get_current_task().get_current_model()
         return model
 
-    def fit_current_model(self):
+    def generate_split_for_task(self, test_size=0.2, stratified=True):
+        if isinstance(test_size, str):
+            test_size = float(test_size)
+            if test_size > 1:
+                test_size = int(test_size)
+        task = self.get_current_task()
+        task.update_labels(self._all_samples, self._dataset)
+        zipped = [(s, l) for s, l in task.labels_dict(self._all_samples).items() if l >= 0]
+        samples, labels = list(zip(*zipped))
+        _, val_split = train_test_split(samples, test_size=test_size, stratify=labels if stratified else None)
+        task.update_split(val_split)
+
+    def fit_current_model(self, callback=None):
+        """
+
+        :param callback: str -> None for logging purposes
+        :return: metrics dict
+        """
+        if callback is None:
+            callback = print
+        callback("Starting dataset init...")
+        task = self.get_current_task()
         model = self.get_current_model()
         assert model.embstore_name == self.embstore_registry.get_current_store_name()
         dataset = {}
-        for sample, label in zip(self.get_samples(), self.get_current_labels()):
-            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True, normalize=True)
+        for sample, label in self.get_current_labels(as_dict=True).items():
+            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True)
             if emb is not None:
                 dataset[sample] = (emb.cpu().numpy(), label)
-        res = model.fit(dataset)
-        self.get_current_task().save_state()
+        callback("Finished dataset init")
+        try:
+            res = model.fit(dataset, test_split=task.validation_samples, callback=callback)
+        except Exception as e:
+            callback(str(e))
         return res
 
     def choose_task(self, task_name=None):
@@ -308,6 +357,8 @@ class TaskRegistry:
     def delete_task(self):
         if self._current_task is None:
             return
+        self._get_task_path(self._current_task).unlink()
+        shutil.rmtree(self._get_model_path(self._current_task, "dummy").parent)
         self.tasks.pop(self._current_task)
         self._current_task = None
         self.save_state()

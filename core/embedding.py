@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import shutil
 from typing import Union, List, Dict
 
 from PIL import Image
@@ -103,7 +104,7 @@ class EmbeddingStore:
                 embedding = None
         if normalize and embedding is not None:
             embedding = embedding / torch.norm(embedding)
-        return embedding
+        return embedding.detach()
 
     @torch.no_grad()
     def add_tag(self, tag: Union[List[str], str]):
@@ -213,3 +214,14 @@ class EmbeddingStoreRegistry:
         self._current_store = store_name
         print("store: ", self._current_store)
 
+    def delete_store(self, store_name=None):
+        if store_name is None:
+            store_name = self._current_store
+        if store_name is None:
+            return
+        store = self.stores[store_name]
+        shutil.rmtree(store.store_path)
+        store.idle()
+        self.stores.pop(store_name)
+        self._current_store = None
+        self.save_state()

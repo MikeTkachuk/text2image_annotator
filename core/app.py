@@ -15,7 +15,7 @@ from core.embedding import EmbeddingStoreRegistry
 from core.task import TaskRegistry
 from core.clustering import Clustering
 from views import *
-from views.utils import Frame, task_creation_popup, BindTk, model_creation_popup
+from views.utils import Frame, task_creation_popup, BindTk, model_creation_popup, save_json_prompt
 from config import *
 
 
@@ -28,8 +28,7 @@ def sort_with_ranks(seq, ranks, reverse=True, return_rank=True):
     return [cat_el[0] for cat_el in sorted_cat]
 
 
-# todo session info, import, export, help, manage models (models dependent on tasks and embstores),
-#
+# todo session info, import, export, help
 
 class App:
     def __init__(self, master: BindTk):
@@ -71,11 +70,13 @@ class App:
             try:
                 self.select_folder(self.full_session_config["meta"].get("last_session"))
             except Exception as e:
+                import traceback
+                traceback.print_exception(e)
                 print("Failed to load previous session: ", e)
 
     def select_folder(self, image_dir=None):
         if image_dir is None:
-            image_dir = filedialog.askdirectory(title="Select Folder")
+            image_dir = filedialog.askdirectory(title="Select Folder", parent=self.master)
         image_dir = Path(image_dir)
         self._image_paths = [str(f) for f in image_dir.rglob("*")
                              if f.suffix in [".jpeg", ".jpg", ".png"] and f.stat().st_size]
@@ -93,7 +94,7 @@ class App:
         project = tk.Menu(master, tearoff=0)
         project.add_command(label="Select Folder", command=self.select_folder)
         export = tk.Menu(project, tearoff=0)
-        export.add_command(label="Raw json")
+        export.add_command(label="Raw json", command=lambda: save_json_prompt(self.export_user_data(), self.master))
         project.add_cascade(menu=export, label="Export As")
         project.add_separator()
 
@@ -238,6 +239,15 @@ class App:
         with open(session_path, "w") as session_data:
             json.dump(self.session_config, session_data)
 
+    def export_user_data(self):
+        output = {
+            **self.session_config,
+            "tasks": {},
+        }
+        for task_name, task in self.task_registry.tasks.items():
+            output["tasks"][task_name] = task.__dict__()
+        return output
+
     def make_record(self, prompt, tags):
         if not self.is_initialized:
             return
@@ -378,14 +388,8 @@ class App:
             registry.validate_selection()
             task_names = list(registry.tasks)
             task_selection.config(values=task_names)
-            model_names = list(registry.get_current_models())
-            model_selection.config(values=model_names)
             if registry.is_initialized:
                 task_selection.current(task_names.index(registry.get_current_task_name()))
-                task = registry.get_current_task()
-                if task.is_initialized:
-                    model_selection.current(
-                        model_names.index(task.get_current_model_name()))
 
         window = tk.Toplevel(self.master, name="manage_tasks")
         window.title("Task settings")
@@ -410,7 +414,7 @@ class App:
         add_task_button.grid(row=0, column=1)
 
         def confirm_delete(delete_func):
-            if messagebox.askokcancel(title="Confirm deletion", message="Delete?"):
+            if messagebox.askokcancel(title="Confirm deletion", message="Delete?", parent=window):
                 delete_func()
                 reload_comboboxes()
 
@@ -419,21 +423,39 @@ class App:
                                         command=lambda: confirm_delete(self.task_registry.delete_task))
         delete_task_button.grid(row=0, column=2)
 
-        model_selection_var = tk.StringVar()
-        model_selection = ttk.Combobox(task_selection_frame, textvariable=model_selection_var,
-                                       values=list(self.task_registry.get_current_models()))
-        model_selection.var = model_selection_var
-        model_selection.bind("<<ComboboxSelected>>",
-                             lambda x: self.task_registry.get_current_task()
-                             .choose_model(model_selection_var.get()))
-        model_selection.grid(row=1, column=0)
-        add_model_button = ttk.Button(task_selection_frame, text="Add model",
-                                      command=model_creation_popup(self, reload_comboboxes))
-        add_model_button.grid(row=1, column=1)
-        delete_model_button = ttk.Button(task_selection_frame,
-                                         text="Delete model",
-                                         command=lambda: confirm_delete(self.task_registry.delete_model))
-        delete_model_button.grid(row=1, column=2)
+        manage_model_button = ttk.Button(window, text="Manage models",
+                                         command=self.manage_models_popup)
+        manage_model_button.grid(row=1, column=0)
+
+        # data split
+        data_split_frame = Frame(window, name="data_split_frame")
+        data_split_frame.grid(row=2, column=0)
+
+        tk.Label(data_split_frame, text="Test split size:").grid(row=0, column=0)
+        test_split_var = tk.StringVar()
+        test_split_var.set("0.2")
+        test_split_entry = ttk.Entry(data_split_frame, textvariable=test_split_var)
+        test_split_entry.grid(row=0, column=1)
+        tk.Label(data_split_frame, text="Stratified").grid(row=1, column=0)
+        stratified_var = tk.BooleanVar()
+        stratified_var.set(True)
+        stratified_button = ttk.Checkbutton(data_split_frame, variable=stratified_var)
+        stratified_button.grid(row=1, column=1)
+
+        def gen_split():
+            if messagebox.askokcancel("Regenerate split",
+                                      "Are you sure you want to reset the validation set?"
+                                      " The model metrics are going to be reset", parent=window):
+                self.task_registry.generate_split_for_task(
+                    test_split_var.get(), stratified=stratified_var.get()
+                )
+                for model in self.task_registry.get_current_task().models.values():
+                    model.last_metrics = {}
+
+        generate_split_button = ttk.Button(data_split_frame, text="Generate split",
+                                           command=gen_split)
+        generate_split_button.grid(row=2, column=0, columnspan=2)
+
         reload_comboboxes()
 
     def manage_embedder_popup(self):
@@ -443,25 +465,41 @@ class App:
         emb_info_frame = Frame(window, name="emb_info_frame", pack=True)
         emb_info_frame.pack(padx=20)
 
-        embedder_names = list(self.embstore_registry.stores)
         embedder_selection_var = tk.StringVar()
-        embedder_selection = ttk.Combobox(emb_info_frame, textvariable=embedder_selection_var,
-                                          values=embedder_names)
+        embedder_selection = ttk.Combobox(emb_info_frame, textvariable=embedder_selection_var)
         embedder_selection.bind("<<ComboboxSelected>>",
                                 lambda x: (self.embstore_registry.choose_store(
                                     embedder_selection_var.get()),
-                                           reload_status()))
-        embedder_selection.current(embedder_names.index(self.embstore_registry.get_current_store_name()))
+                                           reload()))
         embedder_selection.pack(side="left")
+
+        def reload():
+            embedder_names = list(self.embstore_registry.stores)
+            embedder_selection.config(values=embedder_names)
+            if self.embstore_registry.is_initialized:
+                embedder_selection.current(embedder_names.index(self.embstore_registry.get_current_store_name()))
+                statuses = get_precomputed_status()
+                info_label.config(text=f" Precomputed: {sum(statuses)}/{len(self._image_paths)}")
+                info_label.update()
+            else:
+                info_label.config(text="")
+                info_label.update()
+
+        def get_precomputed_status():
+            store = self.embstore_registry.get_current_store()
+            statuses = []
+            for s in self._image_paths:
+                statuses.append(store.embedding_exists(s))
+            return statuses
 
         def _add_by_name():
             try:
                 self.embstore_registry.add_store(
-                    simpledialog.askstring(prompt="Huggingface model name: ", title="Add model")
+                    simpledialog.askstring(prompt="Huggingface model name: ", title="Add embedder", parent=window)
                 )
                 error_label.config(text="")
                 error_label.update()
-                reload_status()
+                reload()
             except RuntimeError as e:
                 error_label.config(text="This model already exists")
                 error_label.update()
@@ -474,12 +512,12 @@ class App:
         def _add_by_path():
             try:
                 self.embstore_registry.add_store(
-                    filedialog.askdirectory(title="Select path to model"),
-                    store_name=simpledialog.askstring(prompt="Store name: ", title="")
+                    filedialog.askdirectory(title="Select path to model", parent=window),
+                    store_name=simpledialog.askstring(prompt="Store name: ", title="", parent=window)
                 )
                 error_label.config(text="")
                 error_label.update()
-                reload_status()
+                reload()
             except RuntimeError as e:
                 error_label.config(text="This task already exists")
                 error_label.update()
@@ -489,6 +527,17 @@ class App:
                                  )
         add_by_path.pack(side="left")
 
+        def confirm_delete(delete_func):
+            if messagebox.askokcancel(title="Confirm deletion", message="Delete?", parent=window):
+                delete_func()
+                reload()
+
+        delete_button = ttk.Button(emb_info_frame, text="Delete",
+                                   command=lambda: confirm_delete(self.embstore_registry.delete_store)
+                                   )
+        delete_button.pack(side="left")
+
+        # precompute
         precompute_frame = Frame(window, name="precompute_frame", pack=True)
         precompute_frame.pack(pady=20, padx=20)
         info_label = tk.Label(precompute_frame, text="")
@@ -509,19 +558,6 @@ class App:
         batch_size_var.set("1")
         batch_size_entry = ttk.Entry(batch_size_frame, textvariable=batch_size_var)
         batch_size_entry.pack(side="left")
-
-        def get_precomputed_status():
-            store = self.embstore_registry.get_current_store()
-            statuses = []
-            for s in self._image_paths:
-                statuses.append(store.embedding_exists(s))
-            return statuses
-
-        def reload_status():
-            embedder_selection.current(embedder_names.index(self.embstore_registry.get_current_store_name()))
-            statuses = get_precomputed_status()
-            info_label.config(text=f" Precomputed: {sum(statuses)}/{len(self._image_paths)}")
-            info_label.update()
 
         def run_precomputing(sample_pool=None):
             store = self.embstore_registry.get_current_store()
@@ -552,7 +588,7 @@ class App:
                 try:  # try if not closed
                     message_label.config(text=f"#Errors: {len(selected) - count}")
                     message_label.update()
-                    reload_status()
+                    reload()
                 except:
                     pass
 
@@ -575,7 +611,7 @@ class App:
                                        )
                                        )
         run_active_button.pack(side="left")
-        reload_status()
+        reload()
 
         message_label = tk.Label(window, text="")
         message_label.pack()
@@ -610,7 +646,7 @@ class App:
             for model_name in model_names:
                 model = task.models[model_name]
                 values = (model_name, str(model.model).split(".")[-1].strip(">'"),
-                          str(model.params), model.embstore_name, model.framework)
+                          str(model.params), str(model.last_metrics), model.embstore_name, model.framework)
                 model_selection.insert("", "end", values[0], text=values[0],
                                        values=values[1:])
 
@@ -632,17 +668,17 @@ class App:
 
         task_selection.grid(row=0, column=0, sticky="w")
 
-        columns = ["#0", "Type", "Params", "Embstore", "Framework"]
+        columns = ["#0", "Type", "Params", "Metrics", "Embstore", "Framework"]
         model_selection = ttk.Treeview(task_selection_frame, columns=columns[1:])
-        column_names = ["Name", "Type", "Params", "Embstore", "Framework"]
-        widths = [100, 100, 350, 100, 100]
+        column_names = ["Name", "Type", "Params", "Metrics", "Embstore", "Framework"]
+        widths = [100, 100, 350, 200, 100, 100]
         for c, cn, w in zip(columns, column_names, widths):
             model_selection.column(c, width=w)
             model_selection.heading(c, text=cn)
-        model_selection.grid(row=1, column=0, columnspan=2)
+        model_selection.grid(row=1, column=0, columnspan=3)
 
         def confirm_delete(delete_func):
-            if messagebox.askokcancel(title="Confirm deletion", message="Delete?"):
+            if messagebox.askokcancel(title="Confirm deletion", message="Delete?", parent=window):
                 delete_func()
                 reload()
 
@@ -654,9 +690,13 @@ class App:
                     model_selection.selection()[0]
                 )
 
+        add_model_button = ttk.Button(task_selection_frame, text="Add model",
+                                      command=lambda: model_creation_popup(self, reload))
+        add_model_button.grid(row=0, column=1, sticky="e")
+
         delete_model_button = ttk.Button(task_selection_frame,
                                          text="Delete model",
                                          command=lambda: confirm_delete(delete_model)
                                          )
-        delete_model_button.grid(row=0, column=1, sticky="e")
+        delete_model_button.grid(row=0, column=2, sticky="e")
         reload()
