@@ -20,12 +20,38 @@ class TrainingFrame(ViewBase):
 
         self._parameter_frames = {}
         self._logs = ""
+        self._training_params = {}
 
     def render(self):
         self._main_setup()
 
     def get_tools(self, master):
         tools = tk.Menu(master, tearoff=0)
+
+        def set_training_options():
+            window = tk.Toplevel(self.master)
+            window.title("Training options")
+            kfold_frame = Frame(window, name="kfold_frame", pack=True)
+            kfold_frame.pack()
+            tk.Label(kfold_frame, text="KFold").pack(side="left")
+            kfold_var = tk.StringVar(value=str(self._training_params.get("kfold", "None")))
+            ttk.Entry(kfold_frame, textvariable=kfold_var).pack(side="left")
+
+            aug_frame = Frame(window, name="aug_frame", pack=True)
+            aug_frame.pack()
+            tk.Label(aug_frame, text="Use augs").pack(side="left")
+            aug_var = tk.BooleanVar(value=self._training_params.get("use_augs", True))
+            ttk.Checkbutton(aug_frame, variable=aug_var).pack(side="left")
+            def closure():
+                self._training_params = {
+                    "kfold": self._parse_param(kfold_var.get()),
+                    "use_augs": aug_var.get(),
+                }
+                window.destroy()
+
+            ttk.Button(window, text="Confirm", command=closure).pack()
+
+        tools.add_command(label="Training options", command=set_training_options)
         return tools
 
     def _main_setup(self):
@@ -231,7 +257,10 @@ class TrainingFrame(ViewBase):
                 self.log_update(val, end=end, overwrite=False)
                 print(val, end=end)
 
-            thread = Thread(target=self.app.task_registry.fit_current_model, args=(callback,))
+            def target():
+                self.app.task_registry.fit_current_model(callback=callback, **self._training_params)
+
+            thread = Thread(target=target)
             thread.start()
         except Exception as e:
             import traceback

@@ -311,10 +311,12 @@ class TaskRegistry:
         _, val_split = train_test_split(samples, test_size=test_size, stratify=labels if stratified else None)
         task.update_split(val_split)
 
-    def fit_current_model(self, callback=None):
+    def fit_current_model(self, callback=None, kfold=None, use_augs=True):
         """
 
         :param callback: str -> None for logging purposes
+        :param kfold: None or int > 2, cross-validation
+        :param use_augs: if True adds uses embeddings from augmented images
         :return: metrics dict
         """
         if callback is None:
@@ -330,7 +332,7 @@ class TaskRegistry:
                 dataset[sample] = (emb.cpu().numpy(), label)
         callback("Finished dataset init")
         try:
-            res = model.fit(dataset, test_split=task.validation_samples, callback=callback)
+            res = model.fit(dataset, test_split=task.validation_samples, callback=callback, kfold=kfold)
         except Exception as e:
             callback(str(e))
         return res

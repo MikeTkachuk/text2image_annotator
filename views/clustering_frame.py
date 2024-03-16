@@ -91,27 +91,25 @@ class ClusteringFrame(ViewBase):
             pca_components_frame = Frame(window, name="pca_components_frame", pack=True)
             pca_components_frame.pack()
             tk.Label(pca_components_frame, text="PCA reduction components:").pack(side="left")
-            pca_components_var = tk.StringVar()
-            pca_components_var.set("50")
+            pca_components_var = tk.StringVar(value=str(self._cluster_params.get("pca_components", "50")))
             ttk.Entry(pca_components_frame, textvariable=pca_components_var).pack(side="left")
 
             tsne_frame = Frame(window, name="tsne_frame", pack=True)
             tsne_frame.pack()
             tk.Label(tsne_frame, text="Use TSNE:").pack(side="left")
-            tsne_var = tk.BooleanVar(value=True)
+            tsne_var = tk.BooleanVar(value=self._cluster_params.get("tsne", True))
             ttk.Checkbutton(tsne_frame, variable=tsne_var).pack(side="left")
 
             use_model_frame = Frame(window, name="use_model_frame", pack=True)
             use_model_frame.pack()
             tk.Label(use_model_frame, text="Use model activations:").pack(side="left")
-            use_model_var = tk.BooleanVar(value=True)
+            use_model_var = tk.BooleanVar(value=self._cluster_params.get("use_model_features", True))
             ttk.Checkbutton(use_model_frame, variable=use_model_var).pack(side="left")
 
             layer_frame = Frame(window, name="layer_frame", pack=True)
             layer_frame.pack()
             tk.Label(layer_frame, text="Model layer index:").pack(side="left")
-            layer_var = tk.StringVar()
-            layer_var.set("-2")
+            layer_var = tk.StringVar(value=str(self._cluster_params.get("layer", "-2")))
             ttk.Entry(layer_frame, textvariable=layer_var).pack(side="left")
 
             def closure():

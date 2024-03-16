@@ -126,7 +126,6 @@ class MLP:
 
     # todo: add augs (task registry adds augmented images to set)
     #  (embstore get_image_emb option to store emb variations in one file; regenerate augs option)
-    # todo: cross-validation options
     def fit(self, X, y):
         self._categories = sorted(set(y))
         y_id = [self._categories.index(val) for val in y]
@@ -246,12 +245,12 @@ class Model:
 
         config_path = self.save_path / "config.json"
         config = {
-                  "params": self.params,
-                  "framework": self.framework,
-                  "embstore_name": self.embstore_name,
-                  "predictions": self._predictions,
-                  "last_metrics": self.last_metrics
-                  }
+            "params": self.params,
+            "framework": self.framework,
+            "embstore_name": self.embstore_name,
+            "predictions": self._predictions,
+            "last_metrics": self.last_metrics
+        }
         with open(config_path, "w") as file:
             json.dump(config, file)
 
@@ -292,9 +291,28 @@ class Model:
 
         :param all_samples:
         :param test_samples: if provided, considered as one of the folds and will be yielded last
-        :param k:
+        :param k: number of folds of size either len(test_samples) or len(all_samples_)//k
         :return:
         """
+        shuffle_index = np.random.permutation(len(all_samples))
+        all_samples = [all_samples[i] for i in shuffle_index]
+        if k == 1 and test_samples is None:
+            yield all_samples, []
+
+        if test_samples is not None:
+            fold_size = len(test_samples)
+            test_set = set(test_samples)
+            all_samples = [s for s in all_samples if s not in test_set] + test_samples
+        else:
+            fold_size = len(all_samples) // k
+
+        for i in range(k):
+            if i == k - 1 and test_samples is not None:
+                yield all_samples[:len(all_samples) - len(test_samples)], test_samples
+            else:
+                step_size = (len(all_samples) - fold_size) // (k - 1)  # moved inside to avoid zero division
+                yield (all_samples[:i * step_size] + all_samples[fold_size + i * step_size:],
+                       all_samples[i * step_size:fold_size + i * step_size])
 
     # todo:
     #  - fit existing samples
@@ -303,42 +321,47 @@ class Model:
     #  - show decision boundary
     #  - suggest based on uncertainty, cluster coverage
     #  - suggestions should be a stream of images sorted by impact/relevance
-    def fit(self, dataset: Dict[str, Tuple[Any, int]], test_split=None, callback=None):
+    def fit(self, dataset: Dict[str, Tuple[Any, int]],
+            test_split=None,
+            callback=None,
+            kfold=None,
+            ):
         if callback is None:
             callback = print
+        if kfold is None:
+            kfold = 1
 
         callback(f"Model params: {self.params}")
         self._model_obj = self.model(**self.params)
         self._model_obj.callback = callback
         self._predictions = {}
-        if test_split is None:
-            test_split = set()
-        else:
-            test_split = set(test_split)
-        keys = set(dataset.keys())
-        train_split = list(keys.difference(test_split))
-        test_split = list(test_split)
+        labeled_data = [s for s in dataset if dataset[s][1] >= 0]
 
-        X = np.array([dataset[k][0].flatten() for k in train_split])
-        y = np.array([dataset[k][1] for k in train_split])
-        validity = y >= 0
-        X_test = np.array([dataset[k][0].flatten() for k in test_split]).reshape(-1, X.shape[-1])
-        y_test = np.array([dataset[k][1] for k in test_split])
-        test_validity = y_test >= 0
-        callback("Starting fit...")
         start = time.time()
-        self._model_obj.fit(X[validity], y[validity])
-        pred = self._model_obj.predict(np.concatenate([X, X_test], axis=0))
-        for s, p in zip(train_split + test_split, pred):
-            self._predictions[s] = int(p)
-
-        pred_test = [self._predictions[s] for s, valid in zip(test_split, test_validity) if valid]
-        self.last_metrics = {
-            "f1_score": round(f1_score(y_test[test_validity], pred_test), 2),
-            "precision": round(precision_score(y_test[test_validity], pred_test), 2),
-            "recall": round(recall_score(y_test[test_validity], pred_test), 2)
-        }
+        metrics = []
+        for i, (train_split, test_split) in enumerate(self._k_fold(labeled_data, test_samples=test_split, k=kfold)):
+            callback(f"Fold #{i}")
+            X = np.array([dataset[k][0].flatten() for k in train_split])
+            y = np.array([dataset[k][1] for k in train_split])
+            X_test = np.array([dataset[k][0].flatten() for k in test_split]).reshape(-1, X.shape[-1])
+            y_test = np.array([dataset[k][1] for k in test_split])
+            callback("Starting fit...")
+            self._model_obj.fit(X, y)
+            pred_test = self._model_obj.predict(X_test)
+            metrics.append({
+                "f1_score": f1_score(y_test, pred_test),
+                "precision": precision_score(y_test, pred_test),
+                "recall": recall_score(y_test, pred_test)
+            })
+        self.last_metrics = {k: round(sum([m[k] for m in metrics])/len(metrics), 2) for k in metrics[0]}
         callback(f"Test scores: {self.last_metrics}")
+        callback(f"Predicting available data...")
+        available_keys = list(dataset.keys())
+        available_features = np.array([dataset[k][0].flatten() for k in available_keys])
+        preds = self._model_obj.predict(available_features)
+        for k, p in zip(available_keys, preds):
+            self._predictions[k] = int(p)
+
         callback(f"Finished. Time elapsed: {time.time() - start}s")
         self.save()
         return self.last_metrics

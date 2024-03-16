@@ -80,6 +80,9 @@ class EmbeddingStore:
         if self._embedder is not None:
             del self._embedder
             self._embedder = None
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
 
     def embedding_exists(self, abs_path):
         rel_path = Path(abs_path).relative_to(self.data_folder_path)

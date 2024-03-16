@@ -91,6 +91,9 @@ class Clustering:
                 ):
         if not self.task_registry.is_initialized:
             return
+
+        # free cuda memory
+        self.embstore_registry.get_current_store().idle()
         if not self.embstore_registry.is_initialized:
             return
         samples, embs, labels = self.get_available_embeddings(use_model_features, layer=layer)
