@@ -1,6 +1,7 @@
-from typing import List
+from typing import List, Dict
 from dataclasses import dataclass
 
+import tqdm
 from PIL import ImageTk, Image
 import numpy as np
 from sklearn.decomposition import PCA
@@ -23,6 +24,7 @@ except (ImportError, Exception):
 @dataclass
 class ClusteringResult:
     filenames: List[str]
+    filename_to_id: Dict[str, int]
     vectors: np.ndarray
     labels: List[int]
     neighbor_tree: NearestNeighbors
@@ -41,7 +43,6 @@ class Clustering:
     def __init__(self, embstore_registry: EmbeddingStoreRegistry, task_registry: TaskRegistry):
         self.embstore_registry = embstore_registry
         self.task_registry = task_registry
-        self.samples = self.task_registry.get_samples()
 
         self._last_result: ClusteringResult = None
 
@@ -50,7 +51,8 @@ class Clustering:
         available_samples = []
         labels = []
         self.task_registry.update_current_task()
-        for sample, label in zip(self.samples, self.task_registry.get_current_labels()):
+        for sample, label in tqdm.tqdm(self.task_registry.get_current_labels().items(),
+                                       desc="Loading embeddings"):
             emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True)
             if emb is not None:
                 embs.append(emb.cpu().numpy())
@@ -77,7 +79,7 @@ class Clustering:
             self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
                                                                    labels)
         else:
-            label_lookup = self.task_registry.get_current_labels(as_dict=True)
+            label_lookup = self.task_registry.get_current_labels()
             self._last_result.labels = [label_lookup.get(s, -1) for s in self._last_result.filenames]
             self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
                                                                    self._last_result.labels)
@@ -98,7 +100,8 @@ class Clustering:
             return
         samples, embs, labels = self.get_available_embeddings(use_model_features, layer=layer)
         if pca_components < embs.shape[-1]:
-            pca_reduced = PCA(n_components=pca_components, random_state=random_state, svd_solver="full").fit_transform(embs)
+            pca_reduced = PCA(n_components=pca_components, random_state=random_state, svd_solver="full").fit_transform(
+                embs)
         else:
             pca_reduced = embs
 
@@ -111,6 +114,7 @@ class Clustering:
         n_tree = NearestNeighbors().fit(out)
         base_plot = self.draw_cluster_result(out, labels)
         res = ClusteringResult(filenames=samples,
+                               filename_to_id=dict(zip(samples, range(len(samples)))),
                                vectors=out,
                                labels=labels,
                                neighbor_tree=n_tree,
@@ -135,7 +139,8 @@ class Clustering:
 
     def draw_cluster_result(self, vectors, labels):
         img = np.ones((CLUSTERING_IMG_SIZE, CLUSTERING_IMG_SIZE, 3), dtype=np.uint8) * 255
-        for vec, label in zip(vectors, labels):
+        zipped = sorted(zip(vectors, labels), key=lambda x: x[1])
+        for vec, label in zipped:
             vec = vec * CLUSTERING_IMG_SIZE
             img = cv.circle(img, [int(vec[0]), int(vec[1])],
                             1, self.get_label_color(label)[:3], -1, cv.LINE_AA)
@@ -192,3 +197,9 @@ class Clustering:
             img = cv.circle(img, [int(vec[0]), int(vec[1])],
                             2, self.get_label_color("selection")[:3], -1, cv.LINE_AA)
         return ImageTk.PhotoImage(Image.fromarray(img))
+
+    def get_data_of_sample(self, filename: str):
+        if self._last_result is None:
+            return None
+        sample_id = self._last_result.filename_to_id[filename]
+        return self._last_result.vectors[sample_id]

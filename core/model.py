@@ -126,6 +126,7 @@ class MLP:
 
     # todo: add augs (task registry adds augmented images to set)
     #  (embstore get_image_emb option to store emb variations in one file; regenerate augs option)
+    # todo: add per-patch embeddings, (2x2 pool, linear, 2x2 pool, ...)
     def fit(self, X, y):
         self._categories = sorted(set(y))
         y_id = [self._categories.index(val) for val in y]
@@ -205,6 +206,8 @@ class Model:
         self.last_metrics = {}
         self._model_obj = self.model(**self.params)
         self._predictions: Dict[str, int] = {}
+        self._suggestions = []
+        self._suggestion_cursor = -1
 
     @staticmethod
     def get_templates():
@@ -249,6 +252,7 @@ class Model:
             "framework": self.framework,
             "embstore_name": self.embstore_name,
             "predictions": self._predictions,
+            "suggestions": self._suggestions,
             "last_metrics": self.last_metrics
         }
         with open(config_path, "w") as file:
@@ -283,6 +287,7 @@ class Model:
                       path)
         model._model_obj = model_obj
         model._predictions = data["predictions"]
+        model._suggestions = data["suggestions"]
         model.last_metrics = data["last_metrics"]
         return model
 
@@ -314,13 +319,14 @@ class Model:
                 yield (all_samples[:i * step_size] + all_samples[fold_size + i * step_size:],
                        all_samples[i * step_size:fold_size + i * step_size])
 
-    # todo:
+    # todo: (goes by active learning)
     #  - fit existing samples
     #  - compute validation metrics
     #  - show model emb clusters
     #  - show decision boundary
     #  - suggest based on uncertainty, cluster coverage
     #  - suggestions should be a stream of images sorted by impact/relevance
+    # todo: measure suggestion efficiency by validating on existing dataset
     def fit(self, dataset: Dict[str, Tuple[Any, int]],
             test_split=None,
             callback=None,
@@ -363,6 +369,8 @@ class Model:
             self._predictions[k] = int(p)
 
         callback(f"Finished. Time elapsed: {time.time() - start}s")
+        self._suggestion_cursor = -1
+        self._suggestions = list(self._predictions)
         self.save()
         return self.last_metrics
 
@@ -381,3 +389,15 @@ class Model:
             return self._model_obj.get_activations(X, layer=layer)
         except Exception as e:
             raise RuntimeError(e)
+
+    def next_annotation_suggestion(self):
+        self._suggestion_cursor = self._suggestion_cursor + 1
+        if self._suggestion_cursor == len(self._suggestions):
+            return None
+        return self._suggestions[self._suggestion_cursor]
+
+    def prev_annotation_suggestion(self):
+        self._suggestion_cursor = self._suggestion_cursor - 1
+        if self._suggestion_cursor < 0:
+            return None
+        return self._suggestions[self._suggestion_cursor]

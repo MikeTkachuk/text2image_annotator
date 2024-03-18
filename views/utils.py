@@ -130,8 +130,10 @@ def task_creation_popup(app: App, callback):
                                          *app.task_registry.get_task_modes())
     task_mode_selection.pack()
 
+    used_tags = app.task_registry.get_tags_in_use()
     for tag, tag_path, _ in zip(*app.search_tags("")):
-        put_node(tag_choice, tag_path, tag)
+        if tag not in used_tags:
+            put_node(tag_choice, tag_path, tag)
 
     error_label = tk.Label(window, text="")
     error_label.pack()

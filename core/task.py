@@ -19,7 +19,7 @@ class Task:
         self.categories = categories
         if isinstance(self.categories, str):
             self.categories = [self.categories]
-        self.labels = []
+        self.labels = {}
         self.user_override = {}
         self.models: Dict[str, Model] = {}
         self.description = ""
@@ -60,9 +60,6 @@ class Task:
             return ["Empty"] + self.categories
         return self.categories
 
-    def labels_dict(self, samples):
-        return dict(zip(samples, self.labels))
-
     def update_labels(self, samples, labelling):
         """
         |  Will be called lazily
@@ -75,7 +72,7 @@ class Task:
         :param samples: list of file paths
         :param labelling: session data of form {sample_path: {"tags":[...], ...}}
         """
-        self.labels = []
+        self.labels = {}
         empty_is_category = len(self.categories) == 1 or self.multiclass_mode == "empty_valid"
         for sample in samples:
             if sample in self.user_override:
@@ -97,7 +94,7 @@ class Task:
                             label = -5
             else:
                 label = -1
-            self.labels.append(label)
+            self.labels[sample] = label
 
     def override_label(self, sample: str, label: int):
         if label == -1:
@@ -165,7 +162,7 @@ class Task:
         task.description = data.get("description", "")
         task.validation_samples = data.get("validation_samples", [])
         for model in data["models"]:
-            task.add_model(Model.load(data["models"][model]), model)
+            task.models[model] = Model.load(data["models"][model])
         return task
 
     def choose_model(self, model_name=None):
@@ -246,14 +243,20 @@ class TaskRegistry:
                         != self.embstore_registry.get_current_store_name()):
                     self.get_current_task().choose_model()
 
+    def get_tags_in_use(self):
+        used_tags = set()
+        for task in self.tasks.values():
+            used_tags.update(task.categories)
+        return used_tags
+
     def add_task(self, tags, mode: TASK_MULTICLASS_MODES = "empty_valid"):
         if not tags or mode not in self.get_task_modes():
             raise RuntimeError(f"Invalid tags {tags} or mode {mode}")
         tags = sorted(tags)
+        used_tags = self.get_tags_in_use()
         for tag in tags:  # can't create overlapping tasks for it will be impossible to merge
-            for task_name, task in self.tasks.items():
-                if tag in task.categories:
-                    raise RuntimeError(f"Tag {tag} already used in {task_name}")
+            if tag in used_tags:
+                raise RuntimeError(f"Tag \"{tag}\" already used")
 
         task_name = "_".join(tags)
         if mode == "empty_valid" or len(tags) == 1:
@@ -306,7 +309,7 @@ class TaskRegistry:
                 test_size = int(test_size)
         task = self.get_current_task()
         task.update_labels(self._all_samples, self._dataset)
-        zipped = [(s, l) for s, l in task.labels_dict(self._all_samples).items() if l >= 0]
+        zipped = [(s, l) for s, l in task.labels.items() if l >= 0]
         samples, labels = list(zip(*zipped))
         _, val_split = train_test_split(samples, test_size=test_size, stratify=labels if stratified else None)
         task.update_split(val_split)
@@ -326,16 +329,16 @@ class TaskRegistry:
         model = self.get_current_model()
         assert model.embstore_name == self.embstore_registry.get_current_store_name()
         dataset = {}
-        for sample, label in self.get_current_labels(as_dict=True).items():
+        for sample, label in self.get_current_labels().items():
             emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True)
             if emb is not None:
                 dataset[sample] = (emb.cpu().numpy(), label)
         callback("Finished dataset init")
         try:
             res = model.fit(dataset, test_split=task.validation_samples, callback=callback, kfold=kfold)
+            return res
         except Exception as e:
             callback(str(e))
-        return res
 
     def choose_task(self, task_name=None):
         assert task_name in self.tasks or task_name is None
@@ -349,11 +352,9 @@ class TaskRegistry:
             return
         self.tasks[self._current_task].update_labels(self._all_samples, self._dataset)
 
-    def get_current_labels(self, as_dict=False):
+    def get_current_labels(self):
         if not self.is_initialized:
             return None
-        if as_dict:
-            return self.get_current_task().labels_dict(self._all_samples)
         return self.get_current_task().labels
 
     def delete_task(self):
@@ -365,5 +366,3 @@ class TaskRegistry:
         self._current_task = None
         self.save_state()
 
-    def get_samples(self):
-        return self._all_samples

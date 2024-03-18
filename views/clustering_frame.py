@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from core.app import App
 
+from threading import Thread
+
 import tkinter as tk
 from tkinter import ttk, simpledialog
 from PIL import ImageTk, Image
@@ -13,8 +15,6 @@ from views.utils import Frame, task_creation_popup, resize_pad_square
 from config import *
 
 
-# todo: add clustering config to include algo, dim, use model emb (what layer if so),
-#  emb preproc (norm, etc),
 # todo: filter by data split
 # todo: option to hide filtered from the plot or highlight them
 # todo: filter by aug and source id
@@ -220,17 +220,20 @@ class ClusteringFrame(ViewBase):
         self.item_preview_frame = Frame(self.right_frame, name="item_preview_frame")
         self.item_preview_frame.grid(row=0, column=1)
 
-        def update_label(direction=1):
+        def update_label(direction=1, value=None):
             if not self.neighbor_choice.selection():
                 return
             selection = self.neighbor_choice.selection()[0]
             selection_meta = self._selection_data[int(selection)]
             task = self.app.task_registry.get_current_task()
             all_labels = [task.label_name(-1)] + task.categories_full
-            new_id = all_labels.index(selection_meta[2]) + direction
+            if value is None:
+                new_id = all_labels.index(selection_meta[2]) + direction
+            else:
+                new_id = value + 1  # only 0-n accepted
             if not 0 <= new_id < len(all_labels):
                 return
-            new_label = all_labels[all_labels.index(selection_meta[2]) + direction]
+            new_label = all_labels[new_id]
             task.override_label(selection_meta[1], task.label_encode(new_label))
             selection_meta[2] = new_label
             self.item_preview_frame.children["preview_label"].config(text=f"<  {new_label}  >")
@@ -240,6 +243,12 @@ class ClusteringFrame(ViewBase):
 
         self.master.bind("<Right>", lambda x: update_label(), user=True)
         self.master.bind("<Left>", lambda x: update_label(-1), user=True)
+        for i in range(10):
+            self.master.bind(f"{i}", lambda x, y=i: update_label(value=y), user=True)
+
+        # bind annotation suggestion keys
+        self.master.bind("<Return>", lambda x: self.focus_next_annotation_suggestion(), user=True)
+        self.master.bind("<Control-Return>", lambda x: self.focus_prev_annotation_suggestion(), user=True)
 
         # post init
         self.reload_comboboxes()
@@ -287,8 +296,43 @@ class ClusteringFrame(ViewBase):
             label.grid(row=0, column=i)
 
     def compute_clustering(self):
-        self.app.clustering.cluster(**self._cluster_params)
-        self.show_clustering_result()
+        def target():
+            self.app.clustering.cluster(**self._cluster_params)
+            try:
+                self.show_clustering_result()
+            except tk.TclError:
+                pass
+
+        t = Thread(target=target)
+        t.start()
+
+    def focus_on_sample(self, sample: str):
+        dummy_event_loc = self.app.clustering.get_data_of_sample(sample) * CLUSTERING_IMG_SIZE
+        if dummy_event_loc is not None:
+            self.populate_neighbors(None, x=dummy_event_loc[0], y=dummy_event_loc[1])
+
+    def focus_next_annotation_suggestion(self):
+        model = self.app.task_registry.get_current_model()
+        if model is None:
+            return
+        task = self.app.task_registry.get_current_task()
+        while True:
+            sample = model.next_annotation_suggestion()
+            if sample is None:
+                return
+            if task.labels.get(sample, -1) < 0 and task.user_override.get(sample, -1) < 0:
+                # check both as they are synchronized rarely
+                self.focus_on_sample(sample)
+                return
+
+    def focus_prev_annotation_suggestion(self):
+        model = self.app.task_registry.get_current_model()
+        if model is None:
+            return
+        sample = model.prev_annotation_suggestion()
+        if sample is None:
+            return
+        self.focus_on_sample(sample)
 
     def update_labels(self, idle=False):
         self.app.task_registry.update_current_task()
@@ -296,11 +340,14 @@ class ClusteringFrame(ViewBase):
         if not idle:
             self.show_clustering_result()
 
-    def populate_neighbors(self, event):
+    def populate_neighbors(self, event, x=None, y=None):
         if self._reload_next_nn:
             self._reload_next_nn = False
             self.update_labels(idle=True)
-        out = self.app.clustering.get_nearest_neighbors(event.x, event.y, self.cursor_size)
+        if x is None or y is None:
+            x = event.x
+            y = event.y
+        out = self.app.clustering.get_nearest_neighbors(x, y, self.cursor_size)
         if out is None:
             return
         ids, filenames, class_names, viz = out

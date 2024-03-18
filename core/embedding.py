@@ -139,6 +139,7 @@ class EmbeddingStore:
 
         return cosines.flatten().cpu().numpy().tolist()
 
+    @torch.no_grad()
     def precompute(self, samples, callback=None, batch_size=1):
         batched = [samples[i*batch_size:(i+1)*batch_size] for i in range(len(samples) // batch_size + 1)]
         count = 0

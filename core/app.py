@@ -257,7 +257,7 @@ class App:
         }
         self.save_state()
 
-    def capture_session_metadata(self):
+    def capture_session_metadata(self):  # todo: capture view metadata
         if not self.is_initialized:
             return
         self.session_config["metadata"] = {
