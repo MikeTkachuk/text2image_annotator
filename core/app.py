@@ -6,6 +6,8 @@ from functools import partial
 from threading import Thread
 
 from pathlib import Path
+
+from PIL import ImageTk
 from tqdm import tqdm
 
 import tkinter as tk
@@ -14,18 +16,10 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 from core.embedding import EmbeddingStoreRegistry
 from core.task import TaskRegistry
 from core.clustering import Clustering
+from core.utils import sort_with_ranks
 from views import *
-from views.utils import Frame, task_creation_popup, BindTk, model_creation_popup, save_json_prompt
+from views.utils import Frame, task_creation_popup, BindTk, model_creation_popup, save_json_prompt, resize_pad_square
 from config import *
-
-
-def sort_with_ranks(seq, ranks, reverse=True, return_rank=True):
-    assert len(seq) == len(ranks)
-    cat = list(zip(seq, ranks))
-    sorted_cat = sorted(cat, key=lambda x: x[1], reverse=reverse)
-    if return_rank:
-        return sorted_cat
-    return [cat_el[0] for cat_el in sorted_cat]
 
 
 # todo session info, import, export, help
@@ -82,7 +76,7 @@ class App:
                              if f.suffix in [".jpeg", ".jpg", ".png"] and f.stat().st_size]
         self._current_index = 0
         self.create_session_config(image_dir)
-        self.current_view.render()
+        self.switch_to_view(self.current_view)
 
     def switch_to_view(self, view: ViewBase):
         self.master.unbind_all_user()
@@ -172,7 +166,8 @@ class App:
         for model_name in ["openai/clip-vit-base-patch32",
                            "openai/clip-vit-large-patch14"]:
             self.embstore_registry.add_store(model_name)
-        self.task_registry = TaskRegistry(self.session_config["data"], self._image_paths, self.embstore_registry,
+        valid_samples = [s for s in self._image_paths if s not in self.skip_paths]
+        self.task_registry = TaskRegistry(self.session_config["data"], valid_samples, self.embstore_registry,
                                           save_dir=self._get_session_dir())
         self.clustering = Clustering(self.embstore_registry, self.task_registry)
         self.full_session_config["meta"]["last_session"] = str(session_dir)
@@ -201,6 +196,12 @@ class App:
     def _get_session_dir(self):
         session_name = self.session_config["name"]
         return Path(WORK_DIR) / f"sessions/{session_name}"
+
+    @property
+    def skip_paths(self):
+        if self.is_initialized:
+            return self.session_config.get("duplicates", {})
+        return []
 
     def get_current_meta(self):
         if not self.is_initialized:
@@ -346,18 +347,36 @@ class App:
             return None
         return self.embstore_registry.stores.get(self.sort_mode)
 
-    def recompute_recommendation(self):
-        if self.emb_store is None:
-            return
+    def register_duplicates(self, path_pairs):
+        to_leave = set()
+        duplicates = {}
+        for s1, s2 in path_pairs:
+            if s1 not in to_leave and s2 not in to_leave:
+                if s1 not in duplicates:
+                    to_leave.add(s1)
+                duplicates[s2] = s1
+            elif s1 in to_leave and s2 in to_leave:
+                duplicates[s2] = s1
+                to_leave.remove(s2)
+            elif s1 in to_leave:
+                duplicates[s2] = s1
+            else:
+                duplicates[s1] = s2
 
-        for img_path in tqdm(self.session_config["data"], desc="Loading image embeddings"):
-            self.emb_store.get_image_embedding(img_path)
+        def relink(el):  # duplicates dict may reference root elements via multiple transitions
+            if el in to_leave:
+                return el
+            root = relink(duplicates[el])
+            duplicates[el] = root
+            return root
 
-        for tag in tqdm(self.session_config["tags"], desc="Loading tag embeddings"):
-            self.emb_store.get_tag_embedding(tag)
+        for v in duplicates:
+            relink(v)
 
-        # perform training
-        # =====
+        self.session_config["duplicates"] = duplicates
+        valid_samples = [s for s in self._image_paths if s not in self.skip_paths]
+        self.task_registry._all_samples = valid_samples
+        self.save_state()
 
     # popups
     def session_info_popup(self):
@@ -381,6 +400,48 @@ class App:
             err_label.config(text=f"#Invalid paths: {count}. See logs for full path")
 
         ttk.Button(err_paths_frame, text="Compute", command=err_compute).pack(side="left")
+
+        duplicates_frame = Frame(window, name="duplicates_frame", pack=True)
+        duplicates_frame.pack()
+        tk.Label(duplicates_frame, text="Manage duplicates, eps dst:").pack(side="left")
+
+        def dup_compute():
+            store = self.embstore_registry.get_current_store()
+            pairs = store.get_duplicates(self._image_paths, eps=float(dup_var.get()))
+
+            def _show_next():
+                _im_size = 400
+                for pair in pairs:
+                    thumbnails = [resize_pad_square(f, _im_size) for f in pair]
+                    preview = Image.new("RGB", (len(thumbnails) * _im_size, _im_size), (255, 255, 255))
+                    for i, img in enumerate(thumbnails):
+                        preview.paste(img, (i * _im_size, 0))
+                    preview_tk = ImageTk.PhotoImage(image=preview)
+                    img_label.config(image=preview_tk)
+                    img_label.image = preview_tk
+                    yield
+
+            gen = _show_next()
+            def next_func():
+                global gen
+                try:
+                    next(gen)
+                except StopIteration:
+                    gen = _show_next()
+                    next(gen)
+            next_button = ttk.Button(duplicates_frame, text="Next", command=lambda: next(gen))
+            next_button.pack()
+            ttk.Button(duplicates_frame, text="Register duplicates",
+                       command=lambda: self.register_duplicates(pairs)).pack()
+            next(gen)
+
+        dup_var = tk.StringVar(value="0.1")
+        ttk.Entry(duplicates_frame, textvariable=dup_var).pack(side="left")
+        ttk.Button(duplicates_frame, text="Compute", command=dup_compute).pack(side="left")
+        dup_viz_frame = Frame(window, name="dup_viz_frame", pack=True)
+        dup_viz_frame.pack()
+        img_label = tk.Label(dup_viz_frame)
+        img_label.pack()
 
     def manage_tasks_popup(self):
         def reload_comboboxes():
@@ -539,7 +600,7 @@ class App:
 
         # precompute
         precompute_frame = Frame(window, name="precompute_frame", pack=True)
-        precompute_frame.pack(pady=20, padx=20)
+        precompute_frame.pack(pady="20 0", padx=20)
         info_label = tk.Label(precompute_frame, text="")
         info_label.pack()
         precompute_count_var = tk.StringVar()
@@ -554,12 +615,24 @@ class App:
         batch_size_frame = Frame(window, name="batch_size_frame", pack=True)
         batch_size_frame.pack()
         tk.Label(batch_size_frame, text="Batch size:").pack(side="left")
-        batch_size_var = tk.StringVar()
-        batch_size_var.set("1")
+        batch_size_var = tk.StringVar(value="1")
         batch_size_entry = ttk.Entry(batch_size_frame, textvariable=batch_size_var)
         batch_size_entry.pack(side="left")
 
+        aug_frame = Frame(window, name="aug_frame", pack=True)
+        aug_frame.pack()
+        tk.Label(aug_frame, text="Aug per image:").pack(side="left")
+        aug_var = tk.StringVar(value="0")
+        aug_entry = ttk.Entry(aug_frame, textvariable=aug_var)
+        aug_entry.pack(side="left")
+        aug_append_var = tk.BooleanVar(value=True)
+        tk.Label(aug_frame, text="Append to store:").pack(side="left")
+        aug_append_checkbox = ttk.Checkbutton(aug_frame, variable=aug_append_var)
+        aug_append_checkbox.pack(side="left")
+
         def run_precomputing(sample_pool=None):
+            run_button.config(state="disabled")
+            run_active_button.config(state="disabled")
             store = self.embstore_registry.get_current_store()
             if sample_pool is None:
                 selected = []
@@ -572,6 +645,13 @@ class App:
                         selected.append(sample)
                     if len(selected) >= max_selected:
                         break
+
+                # add existing samples to the pool if augs > 0
+                if int(aug_var.get()) > 0:
+                    for sample in samples:
+                        if store.embedding_exists(sample):
+                            selected.append(sample)
+
             else:
                 selected = sample_pool
 
@@ -579,27 +659,33 @@ class App:
                 try:  # try if not closed
                     message_label.config(text=f"Progress: {i}/{len(selected)}")
                     message_label.update()
-                except:
+                except tk.TclError:
                     pass
                 # time.sleep(1)
 
             def target():
-                count = store.precompute(selected, callback, batch_size=int(batch_size_var.get()))
+                count = store.precompute(selected,
+                                         callback,
+                                         batch_size=int(batch_size_var.get()),
+                                         aug_per_img=int(aug_var.get()),
+                                         append=aug_append_var.get())
                 try:  # try if not closed
                     message_label.config(text=f"#Errors: {len(selected) - count}")
                     message_label.update()
+                    run_button.config(state="normal")
+                    run_active_button.config(state="normal")
                     reload()
-                except:
+                except tk.TclError:
                     pass
 
             t = Thread(target=target)
             t.start()
 
-        run_button = ttk.Button(batch_size_frame, text="Run", command=run_precomputing)
-        run_button.pack(side="left")
-
+        run_button = ttk.Button(window, text="Run", command=run_precomputing)
+        run_button.pack()
+        # todo: add augment active option / active for specific task to optimize memory
         run_active_frame = Frame(window, name="run_active_frame", pack=True)
-        run_active_frame.pack(pady=10)
+        run_active_frame.pack(pady="30 0")
         tk.Label(run_active_frame, text="Include tasks:").pack(side="left")
         include_tasks_var = tk.BooleanVar()
         include_tasks_var.set(True)
@@ -690,13 +776,15 @@ class App:
                     model_selection.selection()[0]
                 )
 
-        add_model_button = ttk.Button(task_selection_frame, text="Add model",
+        buttons_frame = Frame(task_selection_frame, name="buttons_frame")
+        buttons_frame.grid(row=0, column=1)
+        add_model_button = ttk.Button(buttons_frame, text="Add model",
                                       command=lambda: model_creation_popup(self, reload))
-        add_model_button.grid(row=0, column=1, sticky="e")
+        add_model_button.grid(row=0, column=0)
 
-        delete_model_button = ttk.Button(task_selection_frame,
+        delete_model_button = ttk.Button(buttons_frame,
                                          text="Delete model",
                                          command=lambda: confirm_delete(delete_model)
                                          )
-        delete_model_button.grid(row=0, column=2, sticky="e")
+        delete_model_button.grid(row=0, column=1)
         reload()

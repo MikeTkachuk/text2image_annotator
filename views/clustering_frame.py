@@ -15,10 +15,7 @@ from views.utils import Frame, task_creation_popup, resize_pad_square
 from config import *
 
 
-# todo: filter by data split
 # todo: option to hide filtered from the plot or highlight them
-# todo: filter by aug and source id
-# todo: since too much filter tasks, introduce datapoint flags
 
 class ClusteringFrame(ViewBase):
     def __init__(self, app: App):
@@ -67,19 +64,52 @@ class ClusteringFrame(ViewBase):
             if self._filter.get("prediction"):
                 pred_filter.selection_set(self._filter["prediction"])
 
+            special_frame = Frame(window, name="special_frame", pack=True)
+            special_frame.pack()
+            tk.Label(special_frame, text="Conditions:").pack(side="left")
             special_modes = ["All", "Equal", "Not Equal"]
             special_var = tk.StringVar()
-            special = ttk.OptionMenu(window, special_var,
+            special = ttk.OptionMenu(special_frame, special_var,
                                      special_modes[special_modes.index(self._filter.get("special", "All"))],
                                      *special_modes)
-            special.pack()
+            special.pack(side="left")
 
-            def closure():
-                self._filter["class_name"] = class_filter.selection()
-                self._filter["prediction"] = pred_filter.selection()
-                self._filter["special"] = special_var.get()
+            split_frame = Frame(window, name="split_frame", pack=True)
+            split_frame.pack()
+            tk.Label(split_frame, text="Split:").pack(side="left")
+            split_modes = ["All", "train", "val"]
+            split_var = tk.StringVar()
+            split_filter = ttk.OptionMenu(split_frame, split_var,
+                                          split_modes[split_modes.index(self._filter.get("split", "All"))],
+                                          *split_modes)
+            split_filter.pack(side="left")
+
+            version_frame = Frame(window, name="version_frame", pack=True)
+            version_frame.pack()
+            tk.Label(version_frame, text="Version:").pack(side="left")
+            version_modes = ["All", "orig", "aug"]
+            version_var = tk.StringVar()
+            version_filter = ttk.OptionMenu(version_frame, version_var,
+                                            version_modes[version_modes.index(self._filter.get("version", "All"))],
+                                            *version_modes)
+            version_filter.pack(side="left")
+
+            def closure(do_reset=False):
+                if do_reset:
+                    self._filter = {}
+                else:
+                    if class_filter.selection():
+                        self._filter["class_name"] = class_filter.selection()
+                    if pred_filter.selection():
+                        self._filter["prediction"] = pred_filter.selection()
+
+                    self._filter["split"] = split_var.get()
+                    self._filter["version"] = version_var.get()
+                    self._filter["special"] = special_var.get()
                 window.destroy()
 
+            reset = ttk.Button(window, text="Reset", command=lambda: closure(do_reset=True))
+            reset.pack()
             confirm = ttk.Button(window, text="Confirm", command=closure)
             confirm.pack()
 
@@ -112,12 +142,19 @@ class ClusteringFrame(ViewBase):
             layer_var = tk.StringVar(value=str(self._cluster_params.get("layer", "-2")))
             ttk.Entry(layer_frame, textvariable=layer_var).pack(side="left")
 
+            augs_frame = Frame(window, name="augs_frame", pack=True)
+            augs_frame.pack()
+            tk.Label(augs_frame, text="Include augmented:").pack(side="left")
+            augs_var = tk.BooleanVar(value=self._cluster_params.get("augs", True))
+            ttk.Checkbutton(augs_frame, variable=augs_var).pack(side="left")
+
             def closure():
                 self._cluster_params = {
                     "pca_components": int(pca_components_var.get()),
                     "tsne": tsne_var.get(),
                     "use_model_features": use_model_var.get(),
-                    "layer": int(layer_var.get())
+                    "layer": int(layer_var.get()),
+                    "augs": augs_var.get()
                 }
                 window.destroy()
 
@@ -202,15 +239,16 @@ class ClusteringFrame(ViewBase):
         self.neighbor_list_frame = Frame(self.right_frame, name="neighbor_list_frame")
         self.neighbor_list_frame.grid(row=0, column=0, sticky="w")
         self.neighbor_scrollbar = ttk.Scrollbar(self.neighbor_list_frame, orient="vertical")
+        neighbor_columns = ["#0", "Class", "Pred", "Split", "Version"]
         self.neighbor_choice = ttk.Treeview(self.neighbor_list_frame, height=25 if not DEBUG else 2,
                                             yscrollcommand=self.neighbor_scrollbar.set, selectmode="browse",
-                                            columns=("Class", "Pred"))
-        self.neighbor_choice.column("#0", width=50)
-        self.neighbor_choice.heading("#0", text="Name")
-        self.neighbor_choice.column("Class", width=100)
-        self.neighbor_choice.heading("Class", text="Class")
-        self.neighbor_choice.column("Pred", width=100)
-        self.neighbor_choice.heading("Pred", text="Pred")
+                                            columns=neighbor_columns[1:])
+        neighbor_column_names = ["Id", "Class", "Pred", "Split", "Version"]
+        neighbor_column_widths = [25, 75, 75, 50, 50]
+        for c, n, w in zip(neighbor_columns, neighbor_column_names, neighbor_column_widths):
+            self.neighbor_choice.column(c, width=w)
+            self.neighbor_choice.heading(c, text=n)
+
         self.neighbor_scrollbar.config(command=self.neighbor_choice.yview)
         self.neighbor_scrollbar.grid(row=0, column=1, sticky="nsw")
         self.neighbor_choice.grid(row=0, column=0, sticky="w")
@@ -238,7 +276,7 @@ class ClusteringFrame(ViewBase):
             selection_meta[2] = new_label
             self.item_preview_frame.children["preview_label"].config(text=f"<  {new_label}  >")
             self.neighbor_choice.set(selection, column="Class", value=new_label)
-            self._reload_next_nn = not self.show_predictions_var.get()
+            self._reload_next_nn = True  # not self.show_predictions_var.get()
             self.master.update()
 
         self.master.bind("<Right>", lambda x: update_label(), user=True)
@@ -350,27 +388,20 @@ class ClusteringFrame(ViewBase):
         out = self.app.clustering.get_nearest_neighbors(x, y, self.cursor_size)
         if out is None:
             return
-        ids, filenames, class_names, viz = out
+        viz = out[-1]
         self.clustering_output.config(
             image=viz),
         self.clustering_output.image = viz
         for item in self.neighbor_choice.get_children():
             self.neighbor_choice.delete(item)
         self._selection_data = {}
-        model = self.app.task_registry.get_current_model()
-        task = self.app.task_registry.get_current_task()
-        if model is None:
-            predictions = {}
-        else:
-            predictions = model.get_predictions(filenames)
-        for i, (id_, filename, class_name) in enumerate(zip(ids, filenames, class_names)):
-            self._selection_data[i] = [id_, filename, class_name]
-            pred_name = predictions.get(filename)
-            if pred_name is not None:
-                pred_name = task.label_name(pred_name)
-            if self.filter_condition(class_name=class_name, prediction=pred_name):
+
+        for i, (id_, filename, class_name, pred_name, split, version) in enumerate(zip(*out[:-1])):
+            self._selection_data[i] = [id_, filename, class_name, pred_name, split, version]
+            if self.filter_condition(class_name=class_name, prediction=pred_name,
+                                     split=split, version=version):
                 self.neighbor_choice.insert("", "end", str(i), text=str(i),
-                                            values=(class_name, pred_name))
+                                            values=(class_name, pred_name, split, version))
         if len(self.neighbor_choice.get_children()):
             self.neighbor_choice.focus_set()
             first_child = self.neighbor_choice.get_children()[0]
@@ -378,12 +409,18 @@ class ClusteringFrame(ViewBase):
             self.neighbor_choice.focus(first_child)
         self.preview_neighbor()
 
-    def filter_condition(self, class_name, prediction):
+    def filter_condition(self, class_name, prediction, split, version):
         key = True
         if self._filter.get("class_name"):
             key = key and class_name in self._filter.get("class_name")
         if self._filter.get("prediction"):
             key = key and prediction in self._filter.get("prediction")
+        if self._filter.get("split"):
+            if self._filter.get("split") != "All":
+                key = key and split == self._filter.get("split")
+        if self._filter.get("version"):
+            if self._filter.get("version") != "All":
+                key = key and self._filter.get("version") in version  # orig/aug_0/...
         special_cond = self._filter.get("special")
         if special_cond:
             if special_cond == "Equal":
@@ -413,13 +450,8 @@ class ClusteringFrame(ViewBase):
 
         tk.Label(self.item_preview_frame, text=f"<  {selected_meta[2]}  >", name="preview_label").grid(row=1, column=0)
         if self.show_predictions_var.get():
-            model = self.app.task_registry.get_current_model()
-            task = self.app.task_registry.get_current_task()
-            prediction = None if model is None \
-                else task.label_name(model.get_predictions([selected_meta[1]])[selected_meta[1]])
-
             tk.Label(self.item_preview_frame,
-                     text=f"Prediction: {prediction}", name="preview_prediction_label").grid(row=2, column=0)
+                     text=f"Prediction: {selected_meta[3]}", name="preview_prediction_label").grid(row=2, column=0)
         ttk.Button(self.item_preview_frame,
                    text="Open in annotation tool",
                    command=lambda: (self.app.go_to_image(selected_meta[1]),

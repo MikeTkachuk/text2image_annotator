@@ -11,7 +11,6 @@ from core.embedding import EmbeddingStoreRegistry
 TASK_MULTICLASS_MODES = Literal["empty_valid", "empty_invalid"]
 
 
-# todo: optimize labels to be a (maybe ordered) dict
 class Task:
     def __init__(self, categories, task_path, multiclass_mode: TASK_MULTICLASS_MODES = "empty_valid"):
         self.multiclass_mode: TASK_MULTICLASS_MODES = multiclass_mode
@@ -314,7 +313,7 @@ class TaskRegistry:
         _, val_split = train_test_split(samples, test_size=test_size, stratify=labels if stratified else None)
         task.update_split(val_split)
 
-    def fit_current_model(self, callback=None, kfold=None, use_augs=True):
+    def fit_current_model(self, callback=None, kfold=None, use_augs=True):  # todo: memory efficient dataset
         """
 
         :param callback: str -> None for logging purposes
@@ -328,17 +327,16 @@ class TaskRegistry:
         task = self.get_current_task()
         model = self.get_current_model()
         assert model.embstore_name == self.embstore_registry.get_current_store_name()
-        dataset = {}
-        for sample, label in self.get_current_labels().items():
-            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True)
-            if emb is not None:
-                dataset[sample] = (emb.cpu().numpy(), label)
+        dataset = self.get_current_labels()
         callback("Finished dataset init")
         try:
-            res = model.fit(dataset, test_split=task.validation_samples, callback=callback, kfold=kfold)
+            res = model.fit(dataset, self.embstore_registry.get_current_store(),
+                            test_split=task.validation_samples, callback=callback,
+                            kfold=kfold, use_augs=use_augs)
             return res
         except Exception as e:
-            callback(str(e))
+            import traceback
+            callback(f"Error: {''.join(traceback.format_exception(e))}")
 
     def choose_task(self, task_name=None):
         assert task_name in self.tasks or task_name is None

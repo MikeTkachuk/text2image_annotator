@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.app import App
 
+import time
 from threading import Thread
 
 import tkinter as tk
@@ -11,8 +13,11 @@ from tkinter import ttk, scrolledtext
 
 from views.view_base import ViewBase
 from views.utils import Frame, task_creation_popup, model_creation_popup
+from core.utils import thread_killer
 
 
+# todo: duplicate model/save model template
+# todo: display latest metrics
 class TrainingFrame(ViewBase):
     def __init__(self, app: App):
         self.app = app
@@ -21,6 +26,7 @@ class TrainingFrame(ViewBase):
         self._parameter_frames = {}
         self._logs = ""
         self._training_params = {}
+        self._training_thread = None
 
     def render(self):
         self._main_setup()
@@ -42,6 +48,7 @@ class TrainingFrame(ViewBase):
             tk.Label(aug_frame, text="Use augs").pack(side="left")
             aug_var = tk.BooleanVar(value=self._training_params.get("use_augs", True))
             ttk.Checkbutton(aug_frame, variable=aug_var).pack(side="left")
+
             def closure():
                 self._training_params = {
                     "kfold": self._parse_param(kfold_var.get()),
@@ -124,6 +131,8 @@ class TrainingFrame(ViewBase):
 
         self.fit_button = ttk.Button(self.top_left_frame, text="Fit", command=self.fit_model)
         self.fit_button.grid(row=2, column=0)
+        self.cancel_button = ttk.Button(self.top_left_frame, text="Cancel", state="disabled")
+        self.cancel_button.grid(row=2, column=1)
 
         # Other
         self.right_frame = Frame(self.frame_master, name="right_frame")
@@ -226,23 +235,34 @@ class TrainingFrame(ViewBase):
 
     def log_update(self, value: str, end="\n", overwrite=False):
         value = value + end
-        self._logs = value if overwrite else self._logs + value
 
-        try:
-            self.log.configure(state='normal')
-            if overwrite:
-                self.log.delete(1.0, "end")
-                self.log.insert("end", self._logs)
-            else:
-                self.log.insert("end", value)
-            self.log.configure(state='disabled')
-            # Autoscroll to the bottom
-            self.log.yview("end")
-        except tk.TclError as e:
-            pass
+        def func():
+            self._logs = value if overwrite else self._logs + value
+
+            try:
+                self.log.configure(state='normal')
+                if overwrite:
+                    self.log.delete(1.0, "end")
+                    self.log.insert("end", self._logs)
+                else:
+                    self.log.insert("end", value)
+                self.log.configure(state='disabled')
+                # Autoscroll to the bottom
+                self.log.yview("end")
+            except tk.TclError as e:
+                pass
+        func()
+        # self.master.after(0, func)
 
     def fit_model(self):
+        if self._training_thread is not None and self._training_thread.is_alive():
+            thread_killer.set(self._training_thread.ident)
+            time.sleep(1)
+            self.master.update()
+            self.master.update_idletasks()
         self.log_update("", end="", overwrite=True)
+        self.master.update()
+        self.master.update_idletasks()
         try:
             new_params = {}
             for param_name, (_, var) in self._parameter_frames.items():
@@ -260,9 +280,17 @@ class TrainingFrame(ViewBase):
             def target():
                 self.app.task_registry.fit_current_model(callback=callback, **self._training_params)
 
-            thread = Thread(target=target)
-            thread.start()
+            self._training_thread = Thread(target=target)
+            self._training_thread.daemon = True
+            self._training_thread.start()
+            thread_killer.reset(self._training_thread.ident)
+
+            def cancel_func():
+                thread_killer.set(self._training_thread.ident)
+                self.cancel_button.config(state="disabled")
+
+            self.cancel_button.config(state="normal", command=cancel_func)
+
         except Exception as e:
             import traceback
-            traceback.print_exception(e)
-            self.log_update(f"Error: {e}")
+            self.log_update(f"Error: {''.join(traceback.format_exception(e))}")

@@ -12,6 +12,7 @@ from matplotlib.pyplot import get_cmap
 from core.embedding import EmbeddingStoreRegistry
 from core.task import TaskRegistry
 from config import CLUSTERING_IMG_SIZE
+from core.utils import TrainDataset
 
 try:
     from tsnecuda import TSNE
@@ -30,6 +31,9 @@ class ClusteringResult:
     neighbor_tree: NearestNeighbors
     base_plot: np.ndarray
     neighbors_plot: np.ndarray = None
+    predictions: List[int] = None
+    split: List[str] = None  # train/val
+    version: List[str] = None  # orig/aug_0/...
 
 
 def draw_alpha_rect(img, pts, color=(50, 255, 100), alpha=0.5):
@@ -46,28 +50,42 @@ class Clustering:
 
         self._last_result: ClusteringResult = None
 
-    def get_available_embeddings(self, use_model_features=False, layer=-2):
+    def get_available_embeddings(self, use_model_features=False, layer=-2, augs=True):
         embs = []
         available_samples = []
         labels = []
+        versions = []
         self.task_registry.update_current_task()
-        for sample, label in tqdm.tqdm(self.task_registry.get_current_labels().items(),
-                                       desc="Loading embeddings"):
-            emb = self.embstore_registry.get_current_store().get_image_embedding(sample, load_only=True)
-            if emb is not None:
-                embs.append(emb.cpu().numpy())
-                available_samples.append(sample)
-                labels.append(label)
-        embs = np.concatenate(embs, axis=0)
+        store = self.embstore_registry.get_current_store()
+        model = self.task_registry.get_current_model()
+        use_model_features = use_model_features and model is not None
+        use_spatial = use_model_features and model.params.get("use_spatial", False)
         if use_model_features:
-            model = self.task_registry.get_current_model()
-            if model is not None:
-                try:
-                    embs = model.get_activations(embs, layer)
-                except RuntimeError as e:
-                    raise e
-                    print(e)
-        return available_samples, embs, labels
+            available_samples, labels = list(zip(*[
+                (s, l) for s, l in self.task_registry.get_current_labels().items() if store.embedding_exists(s)
+            ]))
+            dataset = TrainDataset(available_samples,
+                                   store,
+                                   spatial=use_spatial,
+                                   augs=False)  # augs are not used by design
+            embs = model.get_activations(dataset, layer=layer)
+            versions = ["orig"] * len(embs)
+        else:
+            for sample, label in tqdm.tqdm(self.task_registry.get_current_labels().items(),
+                                           desc="Loading embeddings"):
+                emb = store.get_image_embedding(sample, load_only=True, spatial=use_spatial, augs=augs)
+                if emb is not None:
+                    embs.append(emb.cpu().numpy())
+                    available_samples.extend([sample] * emb.shape[0])
+                    labels.extend([label] * emb.shape[0])
+                    version = [f"aug_{i - 1}" for i in range(emb.shape[0])]
+                    version[0] = "orig"
+                    versions.extend(version)
+            embs = np.concatenate(embs, axis=0)
+        predictions = model.get_predictions(available_samples) if (model is not None and use_model_features) else None
+        val_samples = set(self.task_registry.get_current_task().validation_samples)
+        splits = ["val" if s in val_samples else "train" for s in available_samples]
+        return available_samples, embs, labels, predictions, splits, versions
 
     def update_labels(self, use_predictions=False):
         if self._last_result is None:
@@ -75,9 +93,9 @@ class Clustering:
         model = self.task_registry.get_current_model()
         if use_predictions and model is not None:
             label_lookup = model.get_predictions()
-            labels = [label_lookup.get(s, -1) for s in self._last_result.filenames]
+            self._last_result.predictions = [label_lookup.get(s, -1) for s in self._last_result.filenames]
             self._last_result.base_plot = self.draw_cluster_result(self._last_result.vectors,
-                                                                   labels)
+                                                                   self._last_result.predictions)
         else:
             label_lookup = self.task_registry.get_current_labels()
             self._last_result.labels = [label_lookup.get(s, -1) for s in self._last_result.filenames]
@@ -90,6 +108,7 @@ class Clustering:
                 tsne=True,
                 use_model_features=True,
                 layer=-2,
+                augs=False
                 ):
         if not self.task_registry.is_initialized:
             return
@@ -98,7 +117,9 @@ class Clustering:
         self.embstore_registry.get_current_store().idle()
         if not self.embstore_registry.is_initialized:
             return
-        samples, embs, labels = self.get_available_embeddings(use_model_features, layer=layer)
+        samples, embs, labels, predictions, splits, versions = self.get_available_embeddings(use_model_features,
+                                                                                             layer=layer,
+                                                                                             augs=augs)
         if pca_components < embs.shape[-1]:
             pca_reduced = PCA(n_components=pca_components, random_state=random_state, svd_solver="full").fit_transform(
                 embs)
@@ -117,6 +138,9 @@ class Clustering:
                                filename_to_id=dict(zip(samples, range(len(samples)))),
                                vectors=out,
                                labels=labels,
+                               predictions=predictions,
+                               split=splits,
+                               version=versions,
                                neighbor_tree=n_tree,
                                base_plot=base_plot
                                )
@@ -184,9 +208,13 @@ class Clustering:
         self._last_result.neighbors_plot = viz
 
         task = self.task_registry.get_current_task()
-        return (list(zip(*res))[1] if res else [],
-                [self._last_result.filenames[i[1]] for i in res],
-                [task.label_name(self._last_result.labels[i[1]]) for i in res],
+        ids = list(zip(*res))[1] if res else []
+        return (ids,
+                [self._last_result.filenames[i] for i in ids],
+                [task.label_name(self._last_result.labels[i]) for i in ids],
+                [task.label_name(self._last_result.predictions[i]) if self._last_result.predictions else None for i in ids],
+                [self._last_result.split[i] for i in ids],
+                [self._last_result.version[i] for i in ids],
                 ImageTk.PhotoImage(Image.fromarray(viz)))
 
     def draw_selection(self, ids):

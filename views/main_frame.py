@@ -67,12 +67,10 @@ class MainFrame(ViewBase):
         self.tag_rec_mode_menu = ttk.OptionMenu(self.tag_rec_frame, self.tag_rec_mode, self.app.sort_mode,
                                                *self.app.sort_modes,
                                                command=lambda x: setattr(self.app, "sort_mode", x))
-        self.tag_rec_mode_menu.grid(row=1, column=0, sticky="ws")
+        self.tag_rec_mode_menu.grid(row=1, column=1, sticky="ws")
 
-        self.recompute_button = ttk.Button(self.tag_rec_frame, text="Recompute",
-                                          command=lambda: (self.app.recompute_recommendation(),
-                                                           self.filter_tag_choice()))
-        self.recompute_button.grid(row=1, column=1, sticky="ws")
+        self.tag_sort_label = tk.Label(self.tag_rec_frame, text="Choose sorting method:")
+        self.tag_sort_label.grid(row=1, column=0)
         self.blank_entry = scrolledtext.ScrolledText(self.tag_rec_frame, height=16, width=30)
         self.blank_entry.grid(row=0, column=0, columnspan=2)
 

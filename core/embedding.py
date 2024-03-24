@@ -5,8 +5,10 @@ from typing import Union, List, Dict
 
 from PIL import Image
 import torch
+from torch.utils.data import DataLoader
 from transformers import CLIPModel, CLIPProcessor, ViTMAEForPreTraining, AutoImageProcessor
 
+from core.utils import PrecomputeDataset, precompute_collate_fn, TrainDataset, sort_with_ranks
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -19,7 +21,11 @@ def get_embedder(model_name):
 
         def _img_func(obj):
             inputs = clip_processor(images=obj, return_tensors="pt").to(device)
-            return clip_model.get_image_features(**inputs)
+            hidden_states = clip_model.vision_model(inputs.pixel_values,
+                                                    output_hidden_states=True)[0]
+            n_patches = clip_model.config.vision_config.image_size // clip_model.config.vision_config.patch_size
+            return {"pooled": hidden_states[:, 0, :, None, None],
+                    "spatial": hidden_states[:, 1:, :].transpose(1, 2).unflatten(-1, (n_patches, n_patches))}
 
         def _text_func(obj):
             inputs = clip_processor(text=obj, return_tensors="pt").to(device)
@@ -34,7 +40,10 @@ def get_embedder(model_name):
 
         def _img_func(obj):
             inputs = img_processor(images=obj, return_tensors="pt").to(device)
-            return img_model.vit(**inputs).last_hidden_state[:, 0]
+            hidden_states = img_model.vit(**inputs).last_hidden_state
+            n_patches = img_model.config.image_size // img_model.config.patch_size
+            return {"pooled": hidden_states[:, 0, :, None, None],
+                    "spatial": hidden_states[:, 1:, :].transpose(1, 2).unflatten(-1, (n_patches, n_patches))}
 
         return _img_func, None
 
@@ -85,28 +94,92 @@ class EmbeddingStore:
             torch.cuda.empty_cache()
 
     def embedding_exists(self, abs_path):
-        rel_path = Path(abs_path).relative_to(self.data_folder_path)
-        abs_emb_path = self.store_path / rel_path.parent / (rel_path.stem + ".pt")
-        return abs_emb_path.exists()
+        return self._emb_path(abs_path).exists()
+
+    def _emb_path(self, sample_path, spatial=False, aug_id=None):
+        rel_path = Path(sample_path).relative_to(self.data_folder_path)
+        emb_subfolder = self.store_path / rel_path.parent / rel_path.stem
+        if spatial:
+            path = emb_subfolder / "spatial"
+        else:
+            path = emb_subfolder / "pooled"
+
+        if aug_id is not None:
+            path = path / f"aug_{aug_id}.pt"
+        else:
+            path = path / "orig.pt"
+        return path
+
+    def _save_embedder_output(self, sample_path,
+                              output: Dict[str, torch.Tensor],
+                              aug_id=None, dtype=torch.float16):
+        pooled = output["pooled"]
+        if len(pooled.shape) > 3:
+            pooled = pooled[0]
+        path = self._emb_path(sample_path, aug_id=aug_id)
+        if not path.parent.exists():
+            path.parent.mkdir(parents=True)
+        torch.save(pooled.to(dtype), path)
+        spatial = output["spatial"]
+        if len(spatial.shape) > 3:
+            spatial = spatial[0]
+        path = self._emb_path(sample_path, spatial=True, aug_id=aug_id)
+        if not path.parent.exists():
+            path.parent.mkdir(parents=True)
+        torch.save(spatial.to(dtype), path)
 
     @torch.no_grad()
-    def get_image_embedding(self, abs_path, load_only=False, normalize=False):
-        rel_path = Path(abs_path).relative_to(self.data_folder_path)
-        abs_emb_path = self.store_path / rel_path.parent / (rel_path.stem + ".pt")
+    def get_image_embedding(self, abs_path,
+                            load_only=False,
+                            normalize=False,
+                            spatial=False,
+                            squeeze=True,
+                            augs=False):
+        """
+
+        :param abs_path: path to image
+        :param load_only: loads from cache, returns None if does not exist
+        :param normalize: normalizes along embedding dimension (1)
+        :param spatial: if True, returns features of shape [None, embedding_size, h, w],
+                        else returns pooled features with h, w = 1
+        :param squeeze: if spatial is False, new shape is [None, embedding_size]
+        :param augs: int or bool. if bool(augs) is False, returns features for original image,
+                    else returns [:augs] of augmented features or all of them if augs is True
+        :return:
+        """
+        abs_emb_path = self._emb_path(abs_path, spatial=spatial)
+        if not augs:
+            augs = 0
+        elif not isinstance(augs, bool):
+            augs = int(augs)
+        else:
+            augs = -1
+
         if abs_emb_path.exists():
-            embedding = torch.load(abs_emb_path)
+            aug_count = len(list(abs_emb_path.parent.glob("*.pt"))) - 1
+            if augs >= 0:
+                aug_count = min(augs, aug_count)
+            aug_paths = [self._emb_path(abs_path, spatial=spatial, aug_id=i) for i in range(aug_count)]
+            embedding = torch.stack([torch.load(abs_emb_path)] + [torch.load(p) for p in aug_paths])
         else:
             if load_only:
                 return None
             try:
-                embedding = self.embedder[0](Image.open(abs_path).convert("RGB"))
-                abs_emb_path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save(embedding, abs_emb_path)
+                output = self.embedder[0](Image.open(abs_path).convert("RGB"))
+                self._save_embedder_output(abs_path, output)
+                return self.get_image_embedding(abs_path, load_only=True, normalize=normalize,
+                                                spatial=spatial, squeeze=squeeze, augs=augs)
             except Exception as e:
                 print(e, abs_path)
-                embedding = None
+                import traceback
+                traceback.print_exception(e)
+                return None
+
+        if squeeze:
+            embedding = embedding.flatten(1)
+
         if normalize and embedding is not None:
-            embedding = embedding / torch.norm(embedding)
+            embedding = embedding / torch.norm(embedding, dim=1, keepdim=True)
         return embedding.detach()
 
     @torch.no_grad()
@@ -140,25 +213,83 @@ class EmbeddingStore:
         return cosines.flatten().cpu().numpy().tolist()
 
     @torch.no_grad()
-    def precompute(self, samples, callback=None, batch_size=1):
-        batched = [samples[i*batch_size:(i+1)*batch_size] for i in range(len(samples) // batch_size + 1)]
+    def precompute(self, samples, callback=None, batch_size=1, aug_per_img=0, append=True):
+        raw_dataset = PrecomputeDataset(samples, train=False)
+        raw_dataloader = DataLoader(raw_dataset,
+                                    batch_size=batch_size,
+                                    num_workers=4,
+                                    pin_memory=True,
+                                    collate_fn=precompute_collate_fn,
+                                    prefetch_factor=3)
+        if aug_per_img > 0:
+            aug_samples = sum([samples[i*batch_size:(i+1)*batch_size] * aug_per_img
+                               for i in range(len(samples)//batch_size + 1)], [])
+            aug_dataset = PrecomputeDataset(aug_samples, train=True)
+            aug_dataloader = DataLoader(aug_dataset,
+                                        batch_size=batch_size,
+                                        num_workers=4,
+                                        pin_memory=True,
+                                        collate_fn=precompute_collate_fn,
+                                        prefetch_factor=3)
+            aug_dataloader_iterator = iter(aug_dataloader)
+        else:
+            aug_dataloader_iterator = None
         count = 0
-        for i, batch in enumerate(batched):
+        for i, batch in enumerate(raw_dataloader):
             try:
-                embedding = self.embedder[0]([Image.open(sample).convert("RGB") for sample in batch])
+                images, paths = batch
+                true_embedding = self.embedder[0](images)
+                aug_results = []
+                if aug_dataloader_iterator is not None:
+                    for _ in range(aug_per_img):
+                        aug_batch = next(aug_dataloader_iterator)
+                        assert aug_batch[1] == paths
+                        aug_results.append(self.embedder[0](aug_batch[0]))
 
-                for sample_id in range(len(batch)):
-                    rel_path = Path(batch[sample_id]).relative_to(self.data_folder_path)
-                    abs_emb_path = self.store_path / rel_path.parent / (rel_path.stem + ".pt")
-                    abs_emb_path.parent.mkdir(parents=True, exist_ok=True)
-                    torch.save(embedding[[sample_id]], abs_emb_path)
-                count += len(batch)
+                for sample_id in range(len(paths)):
+                    pooled_subfolder = self._emb_path(paths[sample_id])
+                    if not append:
+                        if pooled_subfolder.parent.exists():
+                            shutil.rmtree(pooled_subfolder.parent)
+                        aug_start_id = 0
+                    else:
+                        aug_start_id = len(list(pooled_subfolder.glob("*.pt"))) - 1
+                        aug_start_id = max(0, aug_start_id)
+
+                    to_save = {k: v[sample_id] for k, v in true_embedding.items()}
+                    self._save_embedder_output(paths[sample_id], to_save)
+                    for aug_i, aug_res in enumerate(aug_results):
+                        to_save = {k: aug_res[k][sample_id] for k in aug_res}
+                        self._save_embedder_output(paths[sample_id], to_save, aug_id=aug_start_id + aug_i)
+
+                count += len(paths)
             except Exception as e:
                 print(e)
             if callback is not None:
-                callback(i*batch_size)
+                callback(i * batch_size)
 
         return count
+
+    @torch.no_grad()
+    def get_duplicates(self, samples, batch_size=512, eps=1E-4):
+        dataset = TrainDataset(samples, self, spatial=False, squeeze=True, augs=False)
+        dataloader1 = DataLoader(dataset, batch_size=batch_size)
+        dataloader2 = DataLoader(dataset, batch_size=batch_size)
+        path_pairs = []
+        scores = []
+        for i, batch1 in enumerate(dataloader1):
+            batch1 = batch1.to(device)
+            for k, batch2 in enumerate(dataloader2):
+                batch2 = batch2.to(device)
+                diff = torch.norm(batch1.unsqueeze(1)-batch2.unsqueeze(0), dim=-1)
+                mask = torch.ones_like(diff).triu().bool()
+                diff = torch.where(mask, 64, diff)
+                for row, col in torch.nonzero(diff < eps):
+                    path_pairs.append(
+                        (samples[i*batch_size + row], samples[k*batch_size + col])
+                    )
+                    scores.append(diff[row, col].item())
+        return sort_with_ranks(path_pairs, scores, reverse=True, return_rank=False)
 
 
 class EmbeddingStoreRegistry:

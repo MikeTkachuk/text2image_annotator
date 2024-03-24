@@ -16,6 +16,8 @@ import wandb
 from omegaconf import OmegaConf
 from transformers import AutoImageProcessor, ViTMAEForPreTraining
 
+from core.utils import PrecomputeDataset
+
 MODEL_NAME = "facebook/vit-mae-base"
 PROCESSOR = AutoImageProcessor.from_pretrained(MODEL_NAME)
 
