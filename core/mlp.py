@@ -20,10 +20,9 @@ def parse_iterable(val: str, element_type=int) -> list:
 
 
 class MLPSpatial(torch.nn.Module):
-    def __init__(self, hidden_layers, norm, activation, n_classes, spatial_dim):
+    def __init__(self, hidden_layers, norm, activation, pool, n_classes, spatial_dim):
         super().__init__()
         self.layers = torch.nn.ModuleList()
-        pool = torch.nn.AvgPool2d
         for layer_dim in hidden_layers:
             self.layers.append(torch.nn.LazyConv2d(layer_dim, 1))
             self.layers.append(pool(2, 2, ceil_mode=True))
@@ -83,6 +82,7 @@ class MLP:
     def __init__(self, hidden_layers="(24, 5)",
                  norm="batch",
                  activation="mish",
+                 pool="avg",
                  l2_weight=0.0,
                  learning_rate=0.01,
                  epochs=1000,
@@ -96,6 +96,7 @@ class MLP:
         :param hidden_layers: iterable of hidden layer sizes. the head is attached during fit
         :param norm: type of normalization in ["identity", "batch", "layer"]
         :param activation: type of activation in ["identity", "tanh", "mish"]
+        :param pool: type of spatial pooling in ["avg", "max"]
         :param l2_weight: weight of l2 regularization in loss
         :param learning_rate:
         :param epochs: number of epochs
@@ -106,6 +107,7 @@ class MLP:
         self.hidden_layers = hidden_layers
         self.norm = norm
         self.activation = activation
+        self.pool = pool
         self.l2_weight = l2_weight
         self.learning_rate = learning_rate
         self.epochs = epochs
@@ -129,6 +131,10 @@ class MLP:
             "batch": torch.nn.LazyBatchNorm2d,
             # "layer": torch.nn.LayerNorm,
         }
+        _pool_lookup = {
+            "avg": torch.nn.AvgPool2d,
+            "max": torch.nn.MaxPool2d,
+        }
         n_classes = len(self._categories)
         spatial_dim = dataset[0][0].shape[-1]
         if n_classes < 3:
@@ -137,6 +143,7 @@ class MLP:
         if self.use_spatial:
             self.model = MLPSpatial(self.hidden_layers, _norm_lookup[self.norm],
                                     _activations_lookup[self.activation],
+                                    _pool_lookup[self.pool],
                                     n_classes,
                                     spatial_dim)
         else:
@@ -242,7 +249,7 @@ class MLP:
         return torch.cat(all_activations, dim=0).cpu().numpy()
 
     @torch.no_grad()
-    def get_importance(self, X, dropout_runs=5):
+    def get_importance(self, X, dropout_runs=16):
         runs = []
         for i in range(dropout_runs):
             self.callback(f"Dropout run #{i}")

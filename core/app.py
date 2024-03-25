@@ -25,6 +25,8 @@ from config import *
 # todo session info, import, export, help
 
 class App:
+    """Main backend entity"""
+
     def __init__(self, master: BindTk):
         self.sessions_config_path = Path(WORK_DIR) / "sessions.json"
         if not self.sessions_config_path.exists():
@@ -69,6 +71,7 @@ class App:
                 print("Failed to load previous session: ", e)
 
     def select_folder(self, image_dir=None):
+        """Prompts the user to choose the working directory and inits/restores the session"""
         if image_dir is None:
             image_dir = filedialog.askdirectory(title="Select Folder", parent=self.master)
         image_dir = Path(image_dir)
@@ -109,6 +112,7 @@ class App:
 
     @property
     def is_initialized(self):
+        """And initialized session should have config and at least one image available"""
         return self.session_config is not None and self._image_paths
 
     @property
@@ -131,6 +135,8 @@ class App:
         return ["alphabetic", "popularity"] + self.sort_model_names
 
     def create_session_config(self, session_dir: Path):
+        """Main initialization/session loading function.
+        Loads configs and instantiates all submodules"""
         session_file_name = self.full_session_config["sessions"].get(str(session_dir))
 
         if session_file_name is None or not Path(session_file_name).exists():
@@ -175,6 +181,7 @@ class App:
         self.save_state()
 
     def _load_session_metadata(self):
+        """Loads misc variables stored under metadata field"""
         try:
             self.task_registry.choose_task(self.session_config["metadata"]["last_task"])
         except Exception as e:
@@ -199,11 +206,13 @@ class App:
 
     @property
     def skip_paths(self):
+        """Returns paths that should be skipped in annotation tasks"""
         if self.is_initialized:
             return self.session_config.get("duplicates", {})
         return []
 
     def get_current_meta(self):
+        """Fetches available annotations for current image"""
         if not self.is_initialized:
             return {}
         return self.session_config["data"].get(self._image_paths[self._current_index], {})
@@ -217,6 +226,8 @@ class App:
         return self._image_paths[self._current_index]
 
     def get_active_samples(self, tasks=True):
+        """Returns a list of all samples that are annotated by user.
+         Both via tasks and general annotation"""
         samples = set(self.session_config["data"].keys())
         if tasks:
             for task in self.task_registry.tasks.values():
@@ -228,6 +239,7 @@ class App:
                f"Id: {self._current_index}"
 
     def save_state(self):
+        """Saves current state related to main frame/general annotation"""
         if not self.sessions_config_path.parent.exists():
             self.sessions_config_path.parent.mkdir(parents=True)
         with open(self.sessions_config_path, "w") as sessions_config_file:
@@ -250,6 +262,7 @@ class App:
         return output
 
     def make_record(self, prompt, tags):
+        """Writing function in general annotation"""
         if not self.is_initialized:
             return
         self.session_config["data"][self._image_paths[self._current_index]] = {
@@ -293,6 +306,7 @@ class App:
             self._current_index = min(len(self._image_paths) - 1, max(0, id_))
 
     def update_tag_structure(self, tag: str, new_path: str):
+        """Moves tag to a new path in tag tree structure"""
         if self.is_initialized and tag in self.session_config["tags"]:
             new_path = '/' + new_path.strip('/')
             self.session_config["tags_structure"][tag] = new_path
@@ -314,6 +328,7 @@ class App:
             self.save_state()
 
     def search_tags(self, search_key):
+        """Main tag search function. Transforms user query into suggestions with all sorting applied"""
         if not self.is_initialized:
             return []
         tags_pool = self.sort_tags()
@@ -343,11 +358,15 @@ class App:
 
     @property
     def emb_store(self):
+        """Current embedding store alias"""
         if not self.is_initialized:
             return None
         return self.embstore_registry.stores.get(self.sort_mode)
 
     def register_duplicates(self, path_pairs):
+        """Transforms pairs of similar samples into duplicate<->representative map.
+        Will be used to broadcast annotations back. Updates the samples used by tasks
+        """
         to_leave = set()
         duplicates = {}
         for s1, s2 in path_pairs:
@@ -422,13 +441,15 @@ class App:
                     yield
 
             gen = _show_next()
-            def next_func():
-                global gen
-                try:
-                    next(gen)
-                except StopIteration:
-                    gen = _show_next()
-                    next(gen)
+
+            # def next_func():
+            #     global gen
+            #     try:
+            #         next(gen)
+            #     except StopIteration:
+            #         gen = _show_next()
+            #         next(gen)
+
             next_button = ttk.Button(duplicates_frame, text="Next", command=lambda: next(gen))
             next_button.pack()
             ttk.Button(duplicates_frame, text="Register duplicates",
@@ -444,6 +465,7 @@ class App:
         img_label.pack()
 
     def manage_tasks_popup(self):
+        """Refer to tasks docs for semantics"""
         def reload_comboboxes():
             registry = self.task_registry
             registry.validate_selection()
@@ -520,6 +542,7 @@ class App:
         reload_comboboxes()
 
     def manage_embedder_popup(self):
+        """Refer to embedding store docs for semantics"""
         window = tk.Toplevel(self.master, name="manage_embedder")
         window.title("Embedder settings")
 
@@ -716,6 +739,7 @@ class App:
         exit_button.pack(side="bottom", pady=20)
 
     def manage_models_popup(self):
+        """Refer to models docs for semantics"""
         def reload():
             registry = self.task_registry
             registry.validate_selection()
