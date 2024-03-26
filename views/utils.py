@@ -15,6 +15,7 @@ from core.model import Model
 
 
 class BindTk(tk.Tk):
+    """Enables unbinding all event hooks with a user flag"""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.bind_dict = {}
@@ -42,6 +43,7 @@ class BindTk(tk.Tk):
 
 
 class Frame(FrameBase):
+    """Extends tkinter Frame with debug visualizations"""
     def __init__(self, *args, pack=False, **kwargs):
         if not DEBUG:
             super().__init__(*args, **kwargs)

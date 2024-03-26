@@ -23,6 +23,8 @@ from core.utils import TrainDataset
 
 # todo: add fold it was trained with
 class Model:
+    """Predictor wrapper to store model generator parameters, base class, last metrics,
+    predictions, and annotation suggestions if available"""
     def __init__(self, model, params, framework, embstore_name, save_path):
         self.model = model
         self.params = params
@@ -36,8 +38,10 @@ class Model:
         self._suggestions = []
         self._suggestion_cursor = -1
 
+    # todo: add user templates
     @staticmethod
     def get_templates():
+        """Returns available model templates. Can be customized"""
         return {
             "DecisionTreeClassifier": {"class": DecisionTreeClassifier,
                                        "framework": "sklearn"},
@@ -68,6 +72,7 @@ class Model:
         return out
 
     def save(self):
+        """Serializes model metadata and the model itself"""
         if not self.save_path.exists():
             self.save_path.mkdir(parents=True)
         if self.framework == "torch":
@@ -89,6 +94,7 @@ class Model:
             json.dump(config, file)
 
     def get_model_signature(self):
+        """Parses predictor init function and returns a dict of kwargs and their default values"""
         signature = inspect.signature(self.model.__init__)
         out = {}
         for param_name, param in signature.parameters.items():
@@ -123,10 +129,11 @@ class Model:
 
     def _k_fold(self, all_samples, test_samples=None, k=4):
         """
-
+        Fold generator. Shuffles the sample pool. If provided, test samples are separated from
+         the pool and appended to the shuffled result. After that yields evenly spaced folds, can be overlapped.
         :param all_samples:
         :param test_samples: if provided, considered as one of the folds and will be yielded last
-        :param k: number of folds of size either len(test_samples) or len(all_samples_)//k
+        :param k: number of folds of size either len(test_samples) if provided or len(all_samples_)//k
         :return:
         """
         shuffle_index = np.random.permutation(len(all_samples))
@@ -264,6 +271,10 @@ class Model:
         return out
 
     def get_activations(self, X, layer=-1):
+        """Returns intermediate activations if defined.
+        :param X: data to be predicted
+        :param layer: int, index of linear layer to collect from
+        """
         try:
             return self._model_obj.get_activations(X, layer=layer)
         except Exception as e:

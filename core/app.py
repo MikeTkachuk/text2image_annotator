@@ -30,6 +30,7 @@ class App:
     def __init__(self, master: BindTk):
         self.sessions_config_path = Path(WORK_DIR) / "sessions.json"
         if not self.sessions_config_path.exists():
+            self.sessions_config_path.parent.mkdir(parents=True, exist_ok=True)
             self.sessions_config_path.touch()
             self.full_session_config = {"sessions": {}, "meta": {}}
         else:

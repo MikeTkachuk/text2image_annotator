@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Union
 from dataclasses import dataclass
 
 import tqdm
@@ -19,6 +19,8 @@ try:
 
     TSNE_CUDA_AVAILABLE = True
 except (ImportError, Exception):
+    import warnings
+    warnings.warn("Tsne-cuda unavailable, skipping import.")
     TSNE_CUDA_AVAILABLE = False
 
 
@@ -147,7 +149,7 @@ class Clustering:
         self._last_result = res
         return res
 
-    def get_label_color(self, value: str | int):
+    def get_label_color(self, value: Union[str, int]):
         if value == "selection":
             return (255, 100, 50)
 

@@ -14,6 +14,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def get_embedder(model_name):
+    """Embedder factory function. Should be customized to support other architectures and APIs.
+        Currently supports hugging face transformers API.
+        An image embedder func should return a dictionary of optional features (see code below).
+        A text embedder returns plain vector tensors.
+    """
     if "clip" in model_name:
         clip_model: CLIPModel = CLIPModel.from_pretrained(model_name, device_map=device)
         clip_model.eval()
@@ -49,6 +54,7 @@ def get_embedder(model_name):
 
 
 class EmbeddingStore:
+    """Entity to handle embedding computation and serialization"""
     def __init__(self, store_path, data_folder_path, model_name, store_name=None):
         if store_name is None:
             store_name = model_name
@@ -81,11 +87,13 @@ class EmbeddingStore:
 
     @property
     def embedder(self):
+        """Singleton embedder instance"""
         if self._embedder is None:
             self._embedder = get_embedder(self.model_name)
         return self._embedder
 
     def idle(self):
+        """Offloads embedder to free memory"""
         if self._embedder is not None:
             del self._embedder
             self._embedder = None
@@ -94,9 +102,15 @@ class EmbeddingStore:
             torch.cuda.empty_cache()
 
     def embedding_exists(self, abs_path):
+        """Returns true if the data sample embedding was already computed.
+         Assumes integrity and checks default pooled original non-augmented embedding
+
+         :param abs_path: path-like, path to image sample
+         """
         return self._emb_path(abs_path).exists()
 
     def _emb_path(self, sample_path, spatial=False, aug_id=None):
+        """Linked to embedder return spec."""
         rel_path = Path(sample_path).relative_to(self.data_folder_path)
         emb_subfolder = self.store_path / rel_path.parent / rel_path.stem
         if spatial:
@@ -113,6 +127,8 @@ class EmbeddingStore:
     def _save_embedder_output(self, sample_path,
                               output: Dict[str, torch.Tensor],
                               aug_id=None, dtype=torch.float16):
+        """Linked to embedder return spec."""
+
         pooled = output["pooled"]
         if len(pooled.shape) > 3:
             pooled = pooled[0]
@@ -136,7 +152,7 @@ class EmbeddingStore:
                             squeeze=True,
                             augs=False):
         """
-
+        Image embedding getter. Computes non-augmented version of image embedding if not cached already.
         :param abs_path: path to image
         :param load_only: loads from cache, returns None if does not exist
         :param normalize: normalizes along embedding dimension (1)
@@ -184,6 +200,7 @@ class EmbeddingStore:
 
     @torch.no_grad()
     def add_tag(self, tag: Union[List[str], str]):
+        """Computes text embedding and caches it."""
         if isinstance(tag, str):
             tag = [tag]
         if self.embedder[1] is None:
@@ -194,13 +211,15 @@ class EmbeddingStore:
         torch.save(self.tag_embeddings, self.tag_embeddings_path)
 
     def get_tag_embedding(self, tag: str):
+        """Text embedding getter."""
         if tag not in self.tag_embeddings:
             self.add_tag(tag)
 
         return self.tag_embeddings[tag]
 
     @torch.no_grad()
-    def get_tag_ranks(self, tag_list, image_abs_path):
+    def get_tag_ranks(self, tag_list, image_abs_path) -> List[float]:
+        """Provided image path and text candidates, compute clip-like similarities"""
         if not tag_list:
             return []
         image_embedding = self.get_image_embedding(image_abs_path)
@@ -214,6 +233,15 @@ class EmbeddingStore:
 
     @torch.no_grad()
     def precompute(self, samples, callback=None, batch_size=1, aug_per_img=0, append=True):
+        """Precomputes embeddings for a chunk of image data in a batched way.
+        See core.utils.PrecomputeDataset for augmentations info and customization
+        :param samples: iterable of image paths
+        :param callback: optional logging function. Will be called as callback(num_of_processed)
+        :param batch_size: int,
+        :param aug_per_img: int, number of embedding variations per image
+        :param append: if False, unlinks all existing embeddings of the images to be processed and computes them anew
+                        else appends the augmented embedding variations to the cache
+        """
         raw_dataset = PrecomputeDataset(samples, train=False)
         raw_dataloader = DataLoader(raw_dataset,
                                     batch_size=batch_size,
@@ -272,6 +300,14 @@ class EmbeddingStore:
 
     @torch.no_grad()
     def get_duplicates(self, samples, batch_size=512, eps=1E-4):
+        """Computes similarity matrix in chunks and returns pairs of samples with euclid distance fewer than eps
+
+        :param samples: iterable of image paths
+        :param batch_size: int,
+        :param eps: non-negative float, distance threshold
+
+        :returns list of path pairs sorted by difference (desc)
+        """
         dataset = TrainDataset(samples, self, spatial=False, squeeze=True, augs=False)
         dataloader1 = DataLoader(dataset, batch_size=batch_size)
         dataloader2 = DataLoader(dataset, batch_size=batch_size)
@@ -293,6 +329,7 @@ class EmbeddingStore:
 
 
 class EmbeddingStoreRegistry:
+    """Keeps record of all embedding stores available"""
     def __init__(self, save_dir, data_folder_path):
         self.save_dir = Path(save_dir)
         self.data_folder_path = data_folder_path
@@ -303,6 +340,7 @@ class EmbeddingStoreRegistry:
 
     @property
     def is_initialized(self):
+        """Returns true if an active embedding store is chosen"""
         return self._current_store is not None and len(self.stores)
 
     def save_state(self):
