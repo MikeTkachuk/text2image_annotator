@@ -1,5 +1,7 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict
 
 if TYPE_CHECKING:
     from core.app import App
@@ -16,6 +18,18 @@ from config import *
 
 
 # todo: option to hide filtered from the plot or highlight them
+# todo: button agree with all model predictions from the list
+
+@dataclass
+class SampleInfo:
+    id_: int
+    filename: str
+    class_name: str
+    pred_name: str
+    meta: dict
+    split: str
+    version: str
+
 
 class ClusteringFrame(ViewBase):
     def __init__(self, app: App):
@@ -23,7 +37,7 @@ class ClusteringFrame(ViewBase):
         self.master = self.app.master
 
         self.cursor_size = 0.025
-        self._selection_data = None
+        self._selection_data: Dict[int, SampleInfo] = None
         self._reload_next_nn = False
         self._filter = {}
         self._cluster_params = {}
@@ -145,7 +159,7 @@ class ClusteringFrame(ViewBase):
             augs_frame = Frame(window, name="augs_frame", pack=True)
             augs_frame.pack()
             tk.Label(augs_frame, text="Include augmented:").pack(side="left")
-            augs_var = tk.BooleanVar(value=self._cluster_params.get("augs", True))
+            augs_var = tk.BooleanVar(value=self._cluster_params.get("augs", False))
             ttk.Checkbutton(augs_frame, variable=augs_var).pack(side="left")
 
             def closure():
@@ -266,18 +280,19 @@ class ClusteringFrame(ViewBase):
             task = self.app.task_registry.get_current_task()
             all_labels = [task.label_name(-1)] + task.categories_full
             if value is None:
-                new_id = all_labels.index(selection_meta[2]) + direction
+                new_id = all_labels.index(selection_meta.class_name) + direction
             else:
-                new_id = value + 1  # only 0-n accepted
+                new_id = value + 1  # only 0-n accepted, id_0 reserved for not labeled
             if not 0 <= new_id < len(all_labels):
                 return
             new_label = all_labels[new_id]
-            task.override_label(selection_meta[1], task.label_encode(new_label))
-            selection_meta[2] = new_label
+            task.override_label(selection_meta.filename, task.label_encode(new_label))
+            selection_meta.class_name = new_label
             self.item_preview_frame.children["preview_label"].config(text=f"<  {new_label}  >")
             self.neighbor_choice.set(selection, column="Class", value=new_label)
             self._reload_next_nn = True  # not self.show_predictions_var.get()
             self.master.update()
+            self.master.update_idletasks()
 
         self.master.bind("<Right>", lambda x: update_label(), user=True)
         self.master.bind("<Left>", lambda x: update_label(-1), user=True)
@@ -345,7 +360,7 @@ class ClusteringFrame(ViewBase):
         t.start()
 
     def focus_on_sample(self, sample: str):
-        dummy_event_loc = self.app.clustering.get_data_of_sample(sample) * CLUSTERING_IMG_SIZE
+        dummy_event_loc = self.app.clustering.get_location_of_sample(sample) * CLUSTERING_IMG_SIZE
         if dummy_event_loc is not None:
             self.populate_neighbors(None, x=dummy_event_loc[0], y=dummy_event_loc[1])
 
@@ -396,8 +411,8 @@ class ClusteringFrame(ViewBase):
             self.neighbor_choice.delete(item)
         self._selection_data = {}
 
-        for i, (id_, filename, class_name, pred_name, split, version) in enumerate(zip(*out[:-1])):
-            self._selection_data[i] = [id_, filename, class_name, pred_name, split, version]
+        for i, (id_, filename, class_name, pred_name, meta, split, version) in enumerate(zip(*out[:-1])):
+            self._selection_data[i] = SampleInfo(id_, filename, class_name, pred_name, meta, split, version)
             if self.filter_condition(class_name=class_name, prediction=pred_name,
                                      split=split, version=version):
                 self.neighbor_choice.insert("", "end", str(i), text=str(i),
@@ -407,7 +422,6 @@ class ClusteringFrame(ViewBase):
             first_child = self.neighbor_choice.get_children()[0]
             self.neighbor_choice.selection_set(first_child)
             self.neighbor_choice.focus(first_child)
-        self.preview_neighbor()
 
     def filter_condition(self, class_name, prediction, split, version):
         key = True
@@ -436,23 +450,23 @@ class ClusteringFrame(ViewBase):
             return
         selected_id = self.neighbor_choice.selection()[0]
         selected_meta = self._selection_data[int(selected_id)]
-        img = self.app.clustering.draw_selection([selected_meta[0]])
+        img = self.app.clustering.draw_selection([selected_meta.id_])
         self.clustering_output.config(
             image=img),
         self.clustering_output.image = img
 
         img_label = tk.Label(self.item_preview_frame)
-        square_image = resize_pad_square(selected_meta[1], IMG_SIZE)
+        square_image = resize_pad_square(selected_meta.filename, IMG_SIZE)
         photo = ImageTk.PhotoImage(square_image)
         img_label.config(image=photo)
         img_label.image = photo
         img_label.grid(row=0, column=0)
 
-        tk.Label(self.item_preview_frame, text=f"<  {selected_meta[2]}  >", name="preview_label").grid(row=1, column=0)
+        tk.Label(self.item_preview_frame, text=f"<  {selected_meta.class_name}  >", name="preview_label").grid(row=1, column=0)
         if self.show_predictions_var.get():
             tk.Label(self.item_preview_frame,
-                     text=f"Prediction: {selected_meta[3]}", name="preview_prediction_label").grid(row=2, column=0)
+                     text=f"Prediction: {selected_meta.pred_name} \nOther: {selected_meta.meta} ", name="preview_prediction_label").grid(row=2, column=0)
         ttk.Button(self.item_preview_frame,
                    text="Open in annotation tool",
-                   command=lambda: (self.app.go_to_image(selected_meta[1]),
+                   command=lambda: (self.app.go_to_image(selected_meta.filename),
                                     self.app.switch_to_view(self.app.views.main))).grid(row=3, column=0)

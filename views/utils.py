@@ -158,7 +158,6 @@ def task_creation_popup(app: App, callback):
 
 def model_creation_popup(app: App, callback):
     window = tk.Toplevel(master=app.master, name="model_creation_popup")
-    window.geometry("500x500")
     window.title("New model")
 
     model_name_var = tk.StringVar()
@@ -167,7 +166,7 @@ def model_creation_popup(app: App, callback):
     model_name_entry.selection_range(0, "end")
     model_name_entry.pack()
     model_template_var = tk.StringVar()
-    templates = list(Model.get_templates())
+    templates = list(app.task_registry.model_templates)
     model_template_selection = ttk.OptionMenu(window, model_template_var, templates[0], *templates)
     model_template_selection.pack()
 

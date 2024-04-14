@@ -1,5 +1,6 @@
 import json
 import random
+import textwrap
 import time
 from collections import namedtuple
 from functools import partial
@@ -77,7 +78,7 @@ class App:
             image_dir = filedialog.askdirectory(title="Select Folder", parent=self.master)
         image_dir = Path(image_dir)
         self._image_paths = [str(f) for f in image_dir.rglob("*")
-                             if f.suffix in [".jpeg", ".jpg", ".png"] and f.stat().st_size]
+                             if f.suffix.lower() in [".jpeg", ".jpg", ".png"] and f.stat().st_size]
         self._current_index = 0
         self.create_session_config(image_dir)
         self.switch_to_view(self.current_view)
@@ -467,6 +468,7 @@ class App:
 
     def manage_tasks_popup(self):
         """Refer to tasks docs for semantics"""
+
         def reload_comboboxes():
             registry = self.task_registry
             registry.validate_selection()
@@ -741,6 +743,7 @@ class App:
 
     def manage_models_popup(self):
         """Refer to models docs for semantics"""
+
         def reload():
             registry = self.task_registry
             registry.validate_selection()
@@ -757,7 +760,8 @@ class App:
             for model_name in model_names:
                 model = task.models[model_name]
                 values = (model_name, str(model.model).split(".")[-1].strip(">'"),
-                          str(model.params), str(model.last_metrics), model.embstore_name, model.framework)
+                          textwrap.fill(str(model.params), width=70), str(model.last_metrics), model.embstore_name,
+                          model.framework)
                 model_selection.insert("", "end", values[0], text=values[0],
                                        values=values[1:])
 
@@ -780,7 +784,9 @@ class App:
         task_selection.grid(row=0, column=0, sticky="w")
 
         columns = ["#0", "Type", "Params", "Metrics", "Embstore", "Framework"]
-        model_selection = ttk.Treeview(task_selection_frame, columns=columns[1:])
+        s = ttk.Style()
+        s.configure('model_list.Treeview', rowheight=50)
+        model_selection = ttk.Treeview(task_selection_frame, columns=columns[1:], style="model_list.Treeview")
         column_names = ["Name", "Type", "Params", "Metrics", "Embstore", "Framework"]
         widths = [100, 100, 350, 200, 100, 100]
         for c, cn, w in zip(columns, column_names, widths):
@@ -801,6 +807,20 @@ class App:
                     model_selection.selection()[0]
                 )
 
+        def add_template():
+            selection = model_selection.selection()
+            if not selection:
+                return
+            template_name = simpledialog.askstring(title="New template", prompt="Enter template name: ",
+                                                   parent=window)
+            if template_name:
+                if template_name in self.task_registry.model_templates:
+                    if not messagebox.askokcancel(title="Confirm overwrite",
+                                                  message="Template with this name already exists. Confirm to overwrite",
+                                                  parent=window):
+                        return
+                self.task_registry.add_template(template_name, model_name=selection[0])
+
         buttons_frame = Frame(task_selection_frame, name="buttons_frame")
         buttons_frame.grid(row=0, column=1)
         add_model_button = ttk.Button(buttons_frame, text="Add model",
@@ -812,4 +832,7 @@ class App:
                                          command=lambda: confirm_delete(delete_model)
                                          )
         delete_model_button.grid(row=0, column=1)
+        create_template_button = ttk.Button(buttons_frame, text="Create template",
+                                            command=add_template)
+        create_template_button.grid(row=0, column=2)
         reload()

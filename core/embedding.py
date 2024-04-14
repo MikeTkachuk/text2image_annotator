@@ -72,13 +72,6 @@ class EmbeddingStore:
 
         self._embedder = None
 
-        # transform is unimplemented feature of fine-tuning an mlp on top of embeddings
-        self.transform_path = self.store_path / "transform.pt"
-        if self.transform_path.exists():
-            self.transform = torch.load(self.transform_path)
-        else:
-            self.transform = None
-
         self.tag_embeddings_path = self.store_path / "tag_embeddings.pt"
         if self.tag_embeddings_path.exists():
             self.tag_embeddings = torch.load(self.tag_embeddings_path)
@@ -95,10 +88,11 @@ class EmbeddingStore:
     def idle(self):
         """Offloads embedder to free memory"""
         if self._embedder is not None:
+            print("Embedder idle state requested")
             del self._embedder
-            self._embedder = None
             import gc
             gc.collect()
+            self._embedder = None
             torch.cuda.empty_cache()
 
     def embedding_exists(self, abs_path):
@@ -292,7 +286,8 @@ class EmbeddingStore:
 
                 count += len(paths)
             except Exception as e:
-                print(e)
+                import traceback
+                traceback.print_exc()
             if callback is not None:
                 callback(i * batch_size)
 

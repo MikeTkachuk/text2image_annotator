@@ -35,30 +35,42 @@ class Model:
         self.last_metrics = {}
         self._model_obj = self.model(**self.params)
         self._predictions: Dict[str, int] = {}
+        self._metadata: Dict[str, dict] = {}
         self._suggestions = []
         self._suggestion_cursor = -1
 
-    # todo: add user templates
     @staticmethod
-    def get_templates():
-        """Returns available model templates. Can be customized"""
+    def get_default_templates():
+        """Returns default model templates. Can be customized"""
         return {
-            "DecisionTreeClassifier": {"class": DecisionTreeClassifier,
+            "DecisionTreeClassifier": {"class": "DecisionTreeClassifier",
                                        "framework": "sklearn"},
-            "RandomForestClassifier": {"class": RandomForestClassifier,
+            "RandomForestClassifier": {"class": "RandomForestClassifier",
                                        "framework": "sklearn"},
-            "LogisticRegression": {"class": LogisticRegression,
+            "LogisticRegression": {"class": "LogisticRegression",
                                    "framework": "sklearn"},
-            "MLP": {"class": MLP, "framework": "torch"},
-            "PoolConv": {"class": MLP,
-                         "params": {"use_spatial": True, "batch_size": 64, },
+            "MLP": {"class": "MLP", "framework": "torch"},
+            "PoolConv": {"class": "MLP",
+                         "params": {"use_spatial": True},
                          "framework": "torch"}
         }
 
+    @staticmethod
+    def template_class_map():
+        return dict((c.__name__, c) for c in
+                    [MLP, DecisionTreeClassifier,
+                     RandomForestClassifier, LogisticRegression])
+
     @classmethod
-    def from_template(cls, template_name, embstore_name, save_path):
-        template = cls.get_templates()[template_name]
-        return Model(template["class"], template.get("params", {}), template["framework"], embstore_name, save_path)
+    def from_template(cls, template, embstore_name, save_path):
+        class_map = cls.template_class_map()
+        return Model(class_map[template["class"]], template.get("params", {}),
+                     template["framework"], embstore_name, save_path)
+
+    def to_template(self):
+        return {"class": self.model.__name__,
+                "params": self.params,
+                "framework": self.framework}
 
     def __dict__(self):
         out = {
@@ -67,7 +79,6 @@ class Model:
             "embstore_name": self.embstore_name,
             "predictions": self._predictions,
             "last_metrics": self.last_metrics,
-            "template": str(self.model)
         }
         return out
 
@@ -87,6 +98,7 @@ class Model:
             "framework": self.framework,
             "embstore_name": self.embstore_name,
             "predictions": self._predictions,
+            "metadata": self._metadata,
             "suggestions": self._suggestions,
             "last_metrics": self.last_metrics
         }
@@ -122,9 +134,10 @@ class Model:
                       data["embstore_name"],
                       path)
         model._model_obj = model_obj
-        model._predictions = data["predictions"]
-        model._suggestions = data["suggestions"]
-        model.last_metrics = data["last_metrics"]
+        model._predictions = data.get("predictions", {})
+        model._metadata = data.get("metadata", {})
+        model._suggestions = data.get("suggestions", [])
+        model.last_metrics = data.get("last_metrics", {})
         return model
 
     def _k_fold(self, all_samples, test_samples=None, k=4):
@@ -197,6 +210,8 @@ class Model:
                 y_test = [dataset[s] for s in test_split]
 
                 def test_func():
+                    if not len(X_test):
+                        return
                     _pred_test = self._model_obj.predict(X_test)
                     m = {
                         "f1_score": f1_score(y_test, _pred_test),
@@ -225,12 +240,15 @@ class Model:
                 y_test = np.array(y_test)
                 callback("Starting fit...")
                 self._model_obj.fit(X, y)
-            pred_test = self._model_obj.predict(X_test)
-            metrics.append({
-                "f1_score": f1_score(y_test, pred_test),
-                "precision": precision_score(y_test, pred_test),
-                "recall": recall_score(y_test, pred_test)
-            })
+            if len(X_test):
+                pred_test = self._model_obj.predict(X_test)
+                metrics.append({
+                    "f1_score": f1_score(y_test, pred_test),
+                    "precision": precision_score(y_test, pred_test),
+                    "recall": recall_score(y_test, pred_test)
+                })
+            else:
+                metrics.append({})
             callback(f"Fold scores: {metrics[-1]}")
         self.last_metrics = {k: round(sum([m[k] for m in metrics]) / len(metrics), 2) for k in metrics[0]}
         callback(f"Total test scores: {self.last_metrics}")
@@ -245,10 +263,11 @@ class Model:
                                                  available_keys])
 
         if hasattr(self._model_obj, "get_importance"):
-            proba, importance_scores = self._model_obj.get_importance(available_features)
+            proba, meta, order = self._model_obj.get_importance(available_features)
+            self._metadata = dict(zip(available_keys, meta))
             preds = self._model_obj.predict(None, probas=proba)
-            unlabeled = [(smp, imp) for smp, imp in zip(available_keys, importance_scores) if dataset[smp] < 0]
-            self._suggestions = list(zip(*sorted(unlabeled, key=lambda x: x[1], reverse=True)))[0]
+            unlabeled = [available_keys[i] for i in order if dataset[available_keys[i]] < 0]
+            self._suggestions = unlabeled
         else:
             preds = self._model_obj.predict(available_features)
             self._suggestions = []
@@ -265,9 +284,14 @@ class Model:
             return self._predictions
         return [self._predictions.get(s, -1) for s in samples]
 
+    def get_metadata(self, samples=None):
+        if samples is None:
+            return self._metadata
+        return [self._metadata.get(s) for s in samples]
+
     def get_classes(self):
         out = set(self._predictions.values())
-        out.add(-1)
+        out.add(-1)  # for not labeled case
         return out
 
     def get_activations(self, X, layer=-1):

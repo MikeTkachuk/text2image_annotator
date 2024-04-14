@@ -279,6 +279,10 @@ class TrainingFrame(ViewBase):
 
             def target():
                 self.app.task_registry.fit_current_model(callback=callback, **self._training_params)
+                import gc
+                gc.collect()
+                import torch
+                torch.cuda.empty_cache()
 
             self._training_thread = Thread(target=target)
             self._training_thread.daemon = True

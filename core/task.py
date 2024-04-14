@@ -198,6 +198,7 @@ class TaskRegistry:
         self.embstore_registry = embstore_registry
 
         self.tasks: Dict[str, Task] = {}
+        self.model_templates: Dict[str, dict] = {}
         self._current_task: str = None
         self.load_state()
 
@@ -208,7 +209,8 @@ class TaskRegistry:
 
     def save_state(self, light=True):
         """Saves task locations with an option to recursively save all the tasks"""
-        out = {task_name: str(task.path) for task_name, task in self.tasks.items()}
+        tasks = {task_name: str(task.path) for task_name, task in self.tasks.items()}
+        out = {"tasks": tasks, "model_templates": self.model_templates}
         with open(self.save_dir / "task_registry.json", "w") as file:
             json.dump(out, file)
         if not light:
@@ -221,8 +223,11 @@ class TaskRegistry:
         if (self.save_dir / "task_registry.json").exists():
             with open(self.save_dir / "task_registry.json") as file:
                 data = json.load(file)
-            for task_name in data:
-                self.tasks[task_name] = Task.load(data[task_name])
+            tasks = data["tasks"]
+            for task_name in tasks:
+                self.tasks[task_name] = Task.load(tasks[task_name])
+            self.model_templates = data["model_templates"]
+            self.model_templates.update(Model.get_default_templates())
 
     @staticmethod
     def get_task_modes():
@@ -297,13 +302,28 @@ class TaskRegistry:
             task_name = task_name.replace(ch, "_")
         return self.save_dir / ".task_store" / f"{task_name}.json"
 
+    def add_template(self, template_name: str, model_name=None):
+        """Adds new template from current model"""
+        if not self.is_initialized:
+            raise RuntimeError("Can not add template. Task is not selected")
+        if model_name is None and not self.get_current_task().is_initialized:
+            raise RuntimeError("Can not add template. Model is not selected")
+        if model_name is not None:
+            model = self.get_current_task().models[model_name]
+        else:
+            model = self.get_current_model()
+        self.model_templates[template_name] = model.to_template()
+        self.save_state()
+
     def add_model(self, model_name: str, template_name: str):
         """Adds model to the current task based on model name and model template (see Model docs)"""
         if not self.is_initialized:
             raise RuntimeError("Can not add model. Task is not selected")
         if not self.embstore_registry.is_initialized:
             raise RuntimeError("Can not add model. Embedding store is not selected")
-        model = Model.from_template(template_name,
+        if template_name not in self.model_templates:
+            raise ValueError(f"Can not add model. Invalid template name: {template_name}")
+        model = Model.from_template(self.model_templates[template_name],
                                     self.embstore_registry.get_current_store_name(),
                                     self._get_model_path(self._current_task, model_name))
         self.tasks[self._current_task].add_model(model, model_name)
@@ -351,6 +371,7 @@ class TaskRegistry:
         model = self.get_current_model()
         assert model.embstore_name == self.embstore_registry.get_current_store_name()
         dataset = self.get_current_labels()
+        dataset = {k: v for k, v in dataset.items() if self.embstore_registry.get_current_store().embedding_exists(k)}
         callback("Finished dataset init")
         try:
             res = model.fit(dataset, self.embstore_registry.get_current_store(),

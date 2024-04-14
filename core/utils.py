@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+import functools
+import time
 from typing import TYPE_CHECKING
 
 import psutil
@@ -123,12 +126,19 @@ class TrainDataset(Dataset):
         else:
             emb_full = self.embedder(sample)
         if psutil.Process().memory_info()[0] / 2 ** 30 < 10:  # 10GB max
+            # todo: eats gpu memory when .to(device) is called
             self._cache[sample] = emb_full
         if self.labels is None:
             return emb_full[0].float()
         else:
             random_id = torch.randint(0, emb_full.shape[0], (1,)).item()
             return emb_full[random_id].float(), torch.tensor(self.labels[idx]).float()
+
+    def empty_cache(self):
+        self._cache = {}
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 class ThreadKiller:
@@ -147,4 +157,15 @@ class ThreadKiller:
         self.threads[thread_id] = Event()
 
 
+def timer(func):
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        start = time.time()
+        out = func(*args, **kwargs)
+        print(f"Call to {func.__qualname__} elapsed: {time.time() - start:.4f}")
+        return out
+    return wrapped
+
+
+# globals
 thread_killer = ThreadKiller()

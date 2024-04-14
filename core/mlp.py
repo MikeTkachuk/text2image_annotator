@@ -2,11 +2,14 @@ import math
 import pickle
 from pathlib import Path
 import threading
+from itertools import zip_longest
 
 import torch
 from torch.utils.data import DataLoader
+from sklearn.metrics import f1_score
+from sklearn.cluster import BisectingKMeans
 
-from core.utils import thread_killer
+from core.utils import thread_killer, TrainDataset
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -32,7 +35,7 @@ class MLPSpatial(torch.nn.Module):
         self.layers.append(pool(spatial_dim, 1))
         self.layers.append(torch.nn.LazyConv2d(n_classes, 1, bias=False))
 
-    def forward(self, x, dropout=False):
+    def forward(self, x, dropout=0.2):
         dropout = dropout if isinstance(dropout, float) else 0.2
         for module in self.layers:
             x = module(x)
@@ -60,7 +63,7 @@ class MLPPooled(torch.nn.Module):
             self.layers.append(activation())
         self.layers.append(torch.nn.LazyConv2d(n_classes, 1, bias=False))
 
-    def forward(self, x, dropout=False):
+    def forward(self, x, dropout=0.2):
         dropout = dropout if isinstance(dropout, float) else 0.2
         for module in self.layers:
             x = module(x)
@@ -90,6 +93,8 @@ class MLP:
                  device=DEVICE,
                  use_spatial=False,
                  augs=False,
+                 importance_mode="uncertainty",
+                 importance_sort="coverage"
                  ):
         """
 
@@ -101,6 +106,8 @@ class MLP:
         :param learning_rate:
         :param epochs: number of epochs
         :param batch_size: use -1 to optimize whole dataset
+        :param importance_mode: str in ["uncertainty", "positive", "negative"]
+        :param importance_sort: str in ["simple", "coverage"]. coverage uses bisect kmeans to prioritize diversity
         """
         hidden_layers = parse_iterable(hidden_layers)
         assert len(hidden_layers), f"Provide at least one hidden layer, received {hidden_layers}"
@@ -115,6 +122,8 @@ class MLP:
         self.device = device
         self.use_spatial = use_spatial
         self.augs = augs
+        self.importance_mode = importance_mode
+        self.importance_sort = importance_sort
 
         self._categories = None
         self.model: torch.nn.Module = None
@@ -176,12 +185,17 @@ class MLP:
         obj.model = model
         return obj
 
-    def fit(self, X, y, test_func=None):
+    def fit(self, X: TrainDataset, y, test_func=None):
         self._categories = sorted(set(y))
         self._init(X)
         self.model = self.model.to(self.device)
         self.model.train()
         loss_func = torch.nn.BCEWithLogitsLoss() if len(self._categories) == 2 else torch.nn.CrossEntropyLoss()
+
+        def train_metrics_func(_logits, _labels):
+            _preds = self.predict(None, probas=self.get_proba(_logits))
+            return {"f1_score": f1_score(_labels.cpu().numpy(), _preds.detach().cpu().numpy())}
+
         dataloader = DataLoader(X, batch_size=self.batch_size, shuffle=True)
         optimizer = torch.optim.AdamW(self.model.parameters(),
                                       lr=self.learning_rate,
@@ -194,6 +208,7 @@ class MLP:
             if should_log:
                 self.callback(f"Epoch {epoch}/{self.epochs}", end=" ")
             losses = []
+            train_metrics = []
             for batch in dataloader:
                 if thread_killer.is_set(threading.current_thread().ident):
                     raise Exception("Canceled")
@@ -202,17 +217,29 @@ class MLP:
                 loss = loss_func(preds.squeeze(), labels.to(self.device))
                 loss.backward()
                 losses.append(loss.item())
+                train_metrics.append(train_metrics_func(preds, labels))
                 optimizer.step()
             lr_sched.step()
             if should_log:
                 self.callback(f"Loss: {sum(losses) / len(losses)}")
+                aggregated_metrics = {k: sum(m[k] for m in train_metrics)/len(train_metrics) for k in train_metrics[0]}
+                self.callback(f"Train metrics: {aggregated_metrics}")
                 self.model.eval()
                 test_func()
                 self.model.train()
         self.model.eval()
+        X.empty_cache()
+
+    @staticmethod
+    def get_proba(logits):
+        if len(logits.shape) == 0 or logits.shape[-1] == 1:
+            return torch.sigmoid(logits).flatten()
+        else:
+            assert len(logits.shape) == 2
+            return torch.softmax(logits, dim=-1)
 
     @torch.no_grad()
-    def predict_proba(self, X, dropout=0.2):
+    def predict_proba(self, X, dropout=False):
         dataloader = DataLoader(X, batch_size=self.batch_size)
         all_logits = []
         for batch in dataloader:
@@ -222,11 +249,7 @@ class MLP:
             preds = self.model(data.to(self.device), dropout=dropout)
             all_logits.append(preds)
         all_logits = torch.cat(all_logits, dim=0)
-        if len(all_logits.shape) == 0 or all_logits.shape[-1] == 1:
-            return torch.sigmoid(all_logits).flatten()
-        else:
-            assert len(all_logits.shape) == 2
-            return torch.softmax(all_logits, dim=-1)
+        return self.get_proba(all_logits)
 
     @torch.no_grad()
     def predict(self, X, probas=None):
@@ -249,19 +272,56 @@ class MLP:
         return torch.cat(all_activations, dim=0).cpu().numpy()
 
     @torch.no_grad()
-    def get_importance(self, X, dropout_runs=16):
+    def get_importance(self, X: TrainDataset, dropout_runs=16):
         runs = []
         for i in range(dropout_runs):
             self.callback(f"Dropout run #{i}")
-            runs.append(self.predict_proba(X))
+            runs.append(self.predict_proba(X, dropout=0.2))
 
         runs = torch.stack(runs, dim=0)
         point_estimates = runs.mean(dim=0)
-        if len(point_estimates.shape) < 2:
-            uncertainty = -torch.log(torch.maximum(point_estimates, 1 - point_estimates))
+        if self.importance_mode == "uncertainty":
+            if len(point_estimates.shape) < 2:
+                uncertainty = -torch.log(torch.maximum(point_estimates, 1 - point_estimates))
+            else:
+                uncertainty = -torch.log(torch.max(point_estimates, dim=-1)[0])
+
+            score = uncertainty
+        elif self.importance_mode == "positive":
+            if len(point_estimates.shape) < 2:
+                score = point_estimates
+            else:
+                score = torch.max(point_estimates, dim=-1)[0]
+        elif self.importance_mode == "negative":
+            if len(point_estimates.shape) < 2:
+                score = 1 - point_estimates
+            else:
+                raise ValueError(f"Negative class undefined for multiclass task")
         else:
-            uncertainty = -torch.log(torch.max(point_estimates, dim=-1)[0])
+            raise ValueError(f"Invalid importance mode: {self.importance_mode}")
 
-        score = uncertainty
+        if self.importance_sort == "coverage":
+            activations = self.get_activations(X, layer=-2)
+            kmeans = BisectingKMeans(n_clusters=16, init="k-means++", bisecting_strategy="largest_cluster")
+            clusters = kmeans.fit_predict(activations).tolist()
+            cluster_bins = {}
+            for i, c in enumerate(clusters):
+                el = cluster_bins.get(c, [])
+                el.append(i)
+                cluster_bins[c] = el
+            for c in cluster_bins:
+                cluster_bins[c] = sorted(cluster_bins[c], key=lambda x: score[x], reverse=True)
+            order = []
+            for slice_ in zip_longest(*cluster_bins.values()):
+                order.extend([s for s in slice_ if s is not None])
+            metas = [{"importance": score[i].item(),
+                      "proba": point_estimates[i].item(),
+                      "cluster": clusters[i]}
+                     for i in range(len(score))]
+        else:
+            metas = [{"importance": score[i].item(), "proba": point_estimates[i].item()}
+                     for i in range(len(score))]
+            order = torch.argsort(score, descending=True).tolist()
 
-        return point_estimates, score
+        X.empty_cache()
+        return point_estimates, metas, order

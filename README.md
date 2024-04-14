@@ -2,7 +2,7 @@
 
 It is a tkinter app with utils for tags reuse, and recommendation using out of the box multimodal models.
 
-![](ui1.png)
+![](assets/Main.png)
 
 ### Support
 Was tested on Windows 10/11 with 1920x1080 screen.
