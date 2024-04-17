@@ -1,0 +1,67 @@
+<h3>
+
+    Image annotation tool (by Mike Tkachuk)
+
+</h3>
+<p><i>v1.0.0</i></p>
+<p>What's new:</p>
+<ul>
+    <li> data exploration tab </li>
+    <li> model head training tab</li>
+    <li> introducing tasks</li>
+    <li> spatial embeddings support</li>
+    <li> augmentations support</li>
+    <li> active learning features and suggestions</li>
+    <li> duplicates search</li>
+    <li> lots of other utilities</li>
+
+</ul>
+<h4>About</h4>
+<p>
+    Interactive and semi-automated annotation tool.
+    Has support for image-text pairs annotation, tagging, and classification tasks.
+    Leverages pretrained CLIP-like and vision embedders to gain EDA insights and speed
+    up annotation. You can train simple classification heads on top of embedders and explore
+    your model's behaviour.
+    
+</p>
+<p>
+    <i>
+        Please make sure to export your session at milestones, I will add the import
+        functionality soon.
+        The code works fine in my tests but the data loss is frustrating!
+        All of the CRUD operations call disk sync by design.
+    </i>
+    
+</p>
+<p>
+    Feel free to customize layout, shortcuts, model architectures, etc.
+    All questions, bug reports, and collaborations are welcome in GitHub Issues and
+    Pull Requests!
+    
+</p>
+
+<h4>Controls and shortcuts</h4>
+<p>Refer to <i>Tools -> Info</i> in each view.</p>
+
+<h4>Typical use-case step-by-step guide</h4>
+<ol>
+    <li>Do <i>Project -> Select Folder</i> to start your session.</li>
+    <li>Use annotation UI (main window) to add text labels and tags. Tags are retained for further reuse but can be deleted.</li>
+    <li>Use <i>Tools -> Info</i> for more details.</li>
+    <li>In <i>Project -> Session info</i> session stats can be computed.</li>
+    <li>In <i>Project -> Manage tasks</i> you can add a classification task based on tags retained in step 2. It can be binary or multiclass, multi-select the appropriate tags and mode.</li>
+    <li>In <i>Project -> Manage embedder</i> you can add Huggingface models by name and from disk. See core.embedding.py for architecture docs.</li>
+    <li>Precompute embeddings for some number of images with options of your choice. You can also precompute only images that were annotated so far by pressing <i>Precompute active</i>.</li>
+    <li>Navigate to clustering view and run clustering on your selected task using embeddings you just computed.</li>
+    <li>Click on the plot to explore the data points at that region.</li>
+    <li>Use <i>Tools -> Info</i> for more details here as well.</li>
+    <li>With some data sample active you can override its class in the scope of your classification task. Use arrows or numbers to see effect.</li>
+    <li>Navigate to training view and create a new model for this task. Use one of the predefined templates. You can create new templates from existing models or customize by adding support to your models in <i>core.model.py</i>.</li>
+    <li>Fit your model on your data. You can modify validation split in <i>Project -> Manage tasks</i></li>
+    <li>Now you can view your predictions in clustering view as well, just select the appropriate model.</li>
+    <li>If implemented for your model type, press Enter/Ctrl+Enter to show next/previous suggested image to annotate.</li>
+    <li><b>Repeat the model training and annotation until you are satisfied with the performance!</b></li>
+</ol>
+
+<h4>Enjoy!</h4>

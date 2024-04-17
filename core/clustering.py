@@ -48,6 +48,7 @@ def draw_alpha_rect(img, pts, color=(50, 255, 100), alpha=0.5):
 
 
 class Clustering:
+    """Handles dimensionality reduction, clustering, and drawing tasks"""
     def __init__(self, embstore_registry: EmbeddingStoreRegistry, task_registry: TaskRegistry):
         self.embstore_registry = embstore_registry
         self.task_registry = task_registry
@@ -56,6 +57,13 @@ class Clustering:
         self._cmap_cache: dict = None
 
     def get_available_embeddings(self, use_model_features=False, layer=-2, augs=True):
+        """
+        Top level function to retrieve data to cluster
+        :param use_model_features: if True calls model's get_activations method
+        :param layer: passed into model's get_activations method
+        :param augs: if not using model features, this option includes augmented vectors
+        :return: tuple of iterables containing metadata and the data vectors themselves
+        """
         embs = []
         available_samples = []
         labels = []
@@ -95,6 +103,11 @@ class Clustering:
         return available_samples, embs, labels, predictions, metadata, splits, versions
 
     def update_labels(self, use_predictions=False):
+        """
+        Updates the latest clustering result with the fresh labels and redraws the plot.
+        :param use_predictions: if True, uses model predictions as labels
+        :return:
+        """
         if self._last_result is None:
             return
         model = self.task_registry.get_current_model()
@@ -119,6 +132,19 @@ class Clustering:
                 layer=-2,
                 augs=False
                 ):
+        """
+        Main computation function. Reduces dimensionality, fits NN tree,
+         draws result and stores inside a datastructure
+        :param pca_components: int, reduces to this number of components if needed
+        :param random_state: sklearn random state
+        :param tsne: if True uses tsne
+        :param use_model_features: if True uses model activations as data
+        :param layer: used if model activations are used
+        :param augs: passed into data retriever
+        :return:
+        """
+
+
         if not self.task_registry.is_initialized:
             return
 
@@ -161,6 +187,7 @@ class Clustering:
 
     @property
     def cmap_cache(self):
+        """Speeds up the color lookup. Updates cache once the number of classes is changed"""
         task = self.task_registry.get_current_task()
         n_classes = len(task.categories_full)
         if self._cmap_cache is None or n_classes != len(self._cmap_cache):
@@ -171,7 +198,7 @@ class Clustering:
                 self._cmap_cache[value] = color
         return self._cmap_cache
 
-    def get_label_color(self, value: Union[str, int]):
+    def get_label_color(self, value: Union[str, int]) -> tuple:
         if value == "selection":
             return (255, 100, 50)
 
@@ -191,13 +218,16 @@ class Clustering:
                             1, self.get_label_color(label)[:3], -1, cv.LINE_AA)
         return img
 
-    def get_base_plot(self):
+    def get_base_plot(self) -> ImageTk.PhotoImage:
+        """If last clustering result is available, returns its plot as a tk photoimage.
+        Otherwise, returns a placeholder"""
         if self._last_result is None:
             img = np.ones((CLUSTERING_IMG_SIZE, CLUSTERING_IMG_SIZE), dtype=np.uint8) * 255
             return ImageTk.PhotoImage(Image.fromarray(img))
         return ImageTk.PhotoImage(Image.fromarray(self._last_result.base_plot))
 
     def get_legend(self, img_size=32):
+        """Returns a list of tuples with color samples and their respective class names"""
         out = []
         if self._last_result is None:
             return out
@@ -208,6 +238,16 @@ class Clustering:
         return out
 
     def get_nearest_neighbors(self, x, y, n_neighbors):
+        """Queries the last clustering result with the 2d location, then samples data points based
+        on n_neighbors.
+            The results are sorted based on distance.
+        :param x: x location in pixels
+        :param y: y location in pixels
+        :param n_neighbors: int or float. if > 1 treated as exact number of points to return. else
+            considered the max normalized distance from location.
+
+        :return tuple of sampled ids and metadata + selection visualization as imagetk.photoimage
+        """
         if self._last_result is None:
             return None
 
@@ -241,6 +281,7 @@ class Clustering:
                 ImageTk.PhotoImage(Image.fromarray(viz)))
 
     def draw_selection(self, ids):
+        """Draws a semi-transparent convex hull around selected data points"""
         img = np.copy(self._last_result.neighbors_plot)
         for i in ids:
             vec = self._last_result.vectors[i]
@@ -250,6 +291,7 @@ class Clustering:
         return ImageTk.PhotoImage(Image.fromarray(img))
 
     def get_location_of_sample(self, filename: str):
+        """Query data point location"""
         if self._last_result is None:
             return None
         sample_id = self._last_result.filename_to_id[filename]

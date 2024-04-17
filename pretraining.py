@@ -1,3 +1,6 @@
+"""
+Sample script to train custom MAE embedders. They can be added to the annotation app
+"""
 import random
 from pathlib import Path
 from datetime import datetime
@@ -16,12 +19,13 @@ import wandb
 from omegaconf import OmegaConf
 from transformers import AutoImageProcessor, ViTMAEForPreTraining
 
-from core.utils import PrecomputeDataset
 
 MODEL_NAME = "facebook/vit-mae-base"
 PROCESSOR = AutoImageProcessor.from_pretrained(MODEL_NAME)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+data_dir = None
+working_dir = None
 
 
 def seed_everything(seed=42):
@@ -150,13 +154,11 @@ def train():
     )
     seed_everything(config.seed)
 
-    data_dir = Path(r'C:/Users/Michael/Downloads/tweets_data')
     all_files = [str(f) for f in data_dir.rglob("*") if f.suffix in [".jpeg", ".jpg", ".png"] and f.stat().st_size]
     train_loader, test_loader = get_dataloaders(all_files, config.test_samples, config.batch_size)
     steps_per_epoch = len(train_loader.dataset) // config.batch_size // config.accumulate_steps
     save_every = 5
-    checkpoint_dir = Path(r"C:\Users\Michael\PycharmProjects\text2image_annotator"
-                          ) / f"embedders/{run_name}_{datetime.now().strftime('%m-%d_%H-%M')}"
+    checkpoint_dir = working_dir / f"embedders/{run_name}_{datetime.now().strftime('%m-%d_%H-%M')}"
     model: ViTMAEForPreTraining = ViTMAEForPreTraining.from_pretrained(MODEL_NAME, device_map=device)
     optim = bnb.optim.AdamW8bit(params=model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(optim,

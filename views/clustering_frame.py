@@ -13,12 +13,13 @@ from tkinter import ttk, simpledialog
 from PIL import ImageTk, Image
 
 from views.view_base import ViewBase
-from views.utils import Frame, task_creation_popup, resize_pad_square
+from views.utils import Frame, task_creation_popup, resize_pad_square, documentation_popup
 from config import *
 
 
 # todo: option to hide filtered from the plot or highlight them
 # todo: button agree with all model predictions from the list
+# todo: ctrl+arrows to move focus with keyboard
 
 @dataclass
 class SampleInfo:
@@ -175,6 +176,13 @@ class ClusteringFrame(ViewBase):
             ttk.Button(window, text="Confirm", command=closure).pack()
 
         tools.add_command(label="Clustering options", command=set_clustering_options)
+        tools.add_separator()
+
+        info_icon = ImageTk.PhotoImage(file="assets/view_info/info_icon.png")
+        tools.add_command(label="Info", image=info_icon, compound="left",
+                          command=lambda: documentation_popup(path="assets/view_info/clustering.html",
+                                                              parent=self.master))
+        tools.info_icon = info_icon
         return tools
 
     def _main_setup(self):
@@ -349,10 +357,14 @@ class ClusteringFrame(ViewBase):
             label.grid(row=0, column=i)
 
     def compute_clustering(self):
+        self.clustering_button.config(state="disabled", text="Running...")
+
         def target():
             self.app.clustering.cluster(**self._cluster_params)
             try:
                 self.show_clustering_result()
+                self.clustering_button.config(state="normal", text="Compute")
+
             except tk.TclError:
                 pass
 

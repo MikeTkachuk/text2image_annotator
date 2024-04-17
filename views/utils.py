@@ -6,7 +6,8 @@ if TYPE_CHECKING:
     from core.app import App
 
 from pathlib import Path
-from tkinter import ttk, Frame as FrameBase, filedialog
+from tkhtmlview import HTMLScrolledText
+from tkinter import ttk, Frame as FrameBase, filedialog, scrolledtext
 import tkinter as tk
 import PIL
 from PIL import Image, ImageDraw
@@ -154,6 +155,8 @@ def task_creation_popup(app: App, callback):
 
     create_button = ttk.Button(window, text="Confirm", command=closure)
     create_button.pack()
+    window.focus_set()
+    window.bind("<Return>", lambda x: window.destroy())
 
 
 def model_creation_popup(app: App, callback):
@@ -185,6 +188,8 @@ def model_creation_popup(app: App, callback):
 
     create_button = ttk.Button(window, text="Confirm", command=closure)
     create_button.pack()
+    window.focus_set()
+    window.bind("<Return>", lambda x: window.destroy())
 
 
 def save_json_prompt(obj, parent=None):
@@ -193,3 +198,21 @@ def save_json_prompt(obj, parent=None):
                                            defaultextension=".json",
                                            parent=parent), "w") as file:
         json.dump(obj, file)
+
+
+def documentation_popup(path=None, text=None, parent=None):
+    assert path or text
+    if text is None:
+        with open(path) as f:
+            text = f.read()
+
+    window = tk.Toplevel(master=parent)
+
+    label = HTMLScrolledText(master=window, wrap="word", html=text)
+    label.pack(expand=True, fill="both")
+    label.config(state="disabled")
+    exit_button = ttk.Button(window, text="Ok", command=window.destroy)
+    exit_button.pack(pady=10)
+    window.focus_set()
+    window.bind("<Return>", lambda x: window.destroy())
+

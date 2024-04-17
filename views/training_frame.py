@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PIL import ImageTk
+
 if TYPE_CHECKING:
     from core.app import App
 
@@ -12,7 +14,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 
 from views.view_base import ViewBase
-from views.utils import Frame, task_creation_popup, model_creation_popup
+from views.utils import Frame, task_creation_popup, model_creation_popup, documentation_popup
 from core.utils import thread_killer
 
 
@@ -59,6 +61,13 @@ class TrainingFrame(ViewBase):
             ttk.Button(window, text="Confirm", command=closure).pack()
 
         tools.add_command(label="Training options", command=set_training_options)
+        tools.add_separator()
+
+        info_icon = ImageTk.PhotoImage(file="assets/view_info/info_icon.png")
+        tools.add_command(label="Info", image=info_icon, compound="left",
+                          command=lambda: documentation_popup(path="assets/view_info/training.html",
+                                                              parent=self.master))
+        tools.info_icon = info_icon
         return tools
 
     def _main_setup(self):

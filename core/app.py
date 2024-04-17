@@ -19,7 +19,8 @@ from core.task import TaskRegistry
 from core.clustering import Clustering
 from core.utils import sort_with_ranks
 from views import *
-from views.utils import Frame, task_creation_popup, BindTk, model_creation_popup, save_json_prompt, resize_pad_square
+from views.utils import (Frame, task_creation_popup, BindTk, model_creation_popup,
+                         save_json_prompt, resize_pad_square, documentation_popup)
 from config import *
 
 
@@ -102,7 +103,11 @@ class App:
         project.add_command(label="Manage embedder", command=self.manage_embedder_popup)
         project.add_command(label="Manage models", command=self.manage_models_popup)
         project.add_separator()
-
+        info_icon = ImageTk.PhotoImage(file="assets/view_info/info_icon.png")
+        project.add_command(label="Info", image=info_icon, compound="left",
+                            command=lambda: documentation_popup(path="assets/view_info/general.html",
+                                                                parent=self.master))
+        project.info_icon = info_icon
         return project
 
     def set_navigation_toolbar(self, master: tk.Menu):
@@ -465,6 +470,8 @@ class App:
         dup_viz_frame.pack()
         img_label = tk.Label(dup_viz_frame)
         img_label.pack()
+        window.focus_set()
+        window.bind("<Return>", lambda x: window.destroy())
 
     def manage_tasks_popup(self):
         """Refer to tasks docs for semantics"""
@@ -543,6 +550,8 @@ class App:
         generate_split_button.grid(row=2, column=0, columnspan=2)
 
         reload_comboboxes()
+        window.focus_set()
+        window.bind("<Return>", lambda x: window.destroy())
 
     def manage_embedder_popup(self):
         """Refer to embedding store docs for semantics"""
@@ -740,6 +749,8 @@ class App:
 
         exit_button = ttk.Button(window, text="Ok", command=closure)
         exit_button.pack(side="bottom", pady=20)
+        window.focus_set()
+        window.bind("<Return>", lambda x: window.destroy())
 
     def manage_models_popup(self):
         """Refer to models docs for semantics"""
@@ -836,3 +847,5 @@ class App:
                                             command=add_template)
         create_template_button.grid(row=0, column=2)
         reload()
+        window.focus_set()
+        window.bind("<Return>", lambda x: window.destroy())

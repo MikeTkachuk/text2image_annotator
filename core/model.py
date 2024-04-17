@@ -21,7 +21,6 @@ from core.mlp import MLP
 from core.utils import TrainDataset
 
 
-# todo: add fold it was trained with
 class Model:
     """Predictor wrapper to store model generator parameters, base class, last metrics,
     predictions, and annotation suggestions if available"""
@@ -62,12 +61,14 @@ class Model:
                      RandomForestClassifier, LogisticRegression])
 
     @classmethod
-    def from_template(cls, template, embstore_name, save_path):
+    def from_template(cls, template: dict, embstore_name: str, save_path):
+        """Initialize class and params from template"""
         class_map = cls.template_class_map()
         return Model(class_map[template["class"]], template.get("params", {}),
                      template["framework"], embstore_name, save_path)
 
     def to_template(self):
+        """Extract template info"""
         return {"class": self.model.__name__,
                 "params": self.params,
                 "framework": self.framework}
@@ -140,7 +141,8 @@ class Model:
         model.last_metrics = data.get("last_metrics", {})
         return model
 
-    def _k_fold(self, all_samples, test_samples=None, k=4):
+    @staticmethod
+    def _k_fold(all_samples, test_samples=None, k=4):
         """
         Fold generator. Shuffles the sample pool. If provided, test samples are separated from
          the pool and appended to the shuffled result. After that yields evenly spaced folds, can be overlapped.
@@ -182,7 +184,20 @@ class Model:
             callback=None,
             kfold=None,
             use_augs=True
-            ):
+            ) -> dict:
+        """
+        Currently supports torch and sklearn training routes. Fits predictors,
+         evaluates on test data if provided, and populates predictions, suggestions and other metadata.
+         Also resets suggestion cursor and saves self on disk.
+
+        :param dataset: sample paths and their labels
+        :param emb_store:
+        :param test_split: iterable of sample paths to be used for final evaluation
+        :param callback: print-like func str -> None for logging purposes. default is print
+        :param kfold: number of folds, default is 1
+        :param use_augs: bool, augmented data is used if True, passed into emb_store
+        :return: final metrics
+        """
         if callback is None:
             callback = print
         if kfold is None:
@@ -280,16 +295,21 @@ class Model:
         return self.last_metrics
 
     def get_predictions(self, samples=None):
+        """Returns a map from sample paths to respective predictions.
+                Maps internally if samples iterable is provided"""
         if samples is None:
             return self._predictions
         return [self._predictions.get(s, -1) for s in samples]
 
     def get_metadata(self, samples=None):
+        """Returns a map from sample paths to respective metadata.
+                Maps internally if samples iterable is provided"""
         if samples is None:
             return self._metadata
         return [self._metadata.get(s) for s in samples]
 
     def get_classes(self):
+        """Returns a set of classes used in current predictions. Not labeled class is included"""
         out = set(self._predictions.values())
         out.add(-1)  # for not labeled case
         return out
@@ -305,12 +325,14 @@ class Model:
             raise RuntimeError(e)
 
     def next_annotation_suggestion(self):
+        """Returns the next suggested sample to annotate"""
         self._suggestion_cursor = self._suggestion_cursor + 1
         if self._suggestion_cursor == len(self._suggestions):
             return None
         return self._suggestions[self._suggestion_cursor]
 
     def prev_annotation_suggestion(self):
+        """Returns the previous suggested sample to annotate"""
         self._suggestion_cursor = self._suggestion_cursor - 1
         if self._suggestion_cursor < 0:
             return None

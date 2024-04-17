@@ -253,6 +253,7 @@ class MLP:
 
     @torch.no_grad()
     def predict(self, X, probas=None):
+        """If probabilities are provided, does thresholding only"""
         if probas is None:
             probas = self.predict_proba(X)
         if len(probas.shape) > 1:
@@ -262,6 +263,7 @@ class MLP:
 
     @torch.no_grad()
     def get_activations(self, X, layer=-1):
+        """Retrieve the linear layer activations. Id of the layer can be specified"""
         dataloader = DataLoader(X, batch_size=self.batch_size)
         all_activations = []
         for batch in dataloader:
@@ -273,6 +275,13 @@ class MLP:
 
     @torch.no_grad()
     def get_importance(self, X: TrainDataset, dropout_runs=16):
+        """
+        Estimates predictions with dropout runs, then scores samples by
+        their importance and calculates the order
+        :param X: input data
+        :param dropout_runs: number of times to run inference with dropout
+        :return: class probabilities, metadata, and order of importance
+        """
         runs = []
         for i in range(dropout_runs):
             self.callback(f"Dropout run #{i}")

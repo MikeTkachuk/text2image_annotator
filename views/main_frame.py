@@ -6,7 +6,8 @@ from PIL import Image, ImageTk
 
 from views.view_base import ViewBase
 from config import *
-from views.utils import Frame, put_node, resize_pad_square
+from views.utils import Frame, put_node, resize_pad_square, documentation_popup
+
 
 # todo: open image in explorer
 class MainFrame(ViewBase):
@@ -202,6 +203,14 @@ class MainFrame(ViewBase):
         tools.add_separator()
 
         tools.add_command(label="Go to", command=self.go_to_image)
+
+        tools.add_separator()
+
+        info_icon = ImageTk.PhotoImage(file="assets/view_info/info_icon.png")
+        tools.add_command(label="Info", image=info_icon, compound="left",
+                          command=lambda: documentation_popup(path="assets/view_info/main.html",
+                                                              parent=self.master))
+        tools.info_icon = info_icon
 
         return tools
 
