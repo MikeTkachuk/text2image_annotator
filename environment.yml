@@ -1,0 +1,16 @@
+name: txt2img_ann
+channels:
+  - default
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - tkhtmlview
+    - numpy
+    - torch
+    - torchvision
+    - scikit-learn
+    - pillow
+    - opencv-python
+    - matplotlib
+    - transformers
