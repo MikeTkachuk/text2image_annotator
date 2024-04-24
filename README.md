@@ -30,8 +30,8 @@ Feel free to customize layout, shortcuts, model architectures, etc. All question
 ### Installation and Requirements
 (Should work quite stably even with deviations from my setup)  
 Was tested on Windows 10/11 with 1920x1080 screen.  
-(potentially optional) GPU - 8GB
-Possible syntax errors in python < 3.10 
+(potentially optional) GPU - 8GB  
+Possible syntax errors in python < 3.10  
 
 **Run**  
 ```conda env create -f environment.yml```  
