@@ -147,9 +147,6 @@ class ClusteringFrame(ViewBase):
 
             use_model_frame = Frame(window, name="use_model_frame", pack=True)
             use_model_frame.pack()
-            tk.Label(use_model_frame, text="Use model activations:").pack(side="left")
-            use_model_var = tk.BooleanVar(value=self._cluster_params.get("use_model_features", True))
-            ttk.Checkbutton(use_model_frame, variable=use_model_var).pack(side="left")
 
             layer_frame = Frame(window, name="layer_frame", pack=True)
             layer_frame.pack()
@@ -167,7 +164,7 @@ class ClusteringFrame(ViewBase):
                 self._cluster_params = {
                     "pca_components": int(pca_components_var.get()),
                     "tsne": tsne_var.get(),
-                    "use_model_features": use_model_var.get(),
+                    "use_model_features": True,  # use model features as long as the model is active
                     "layer": int(layer_var.get()),
                     "augs": augs_var.get()
                 }
@@ -217,7 +214,7 @@ class ClusteringFrame(ViewBase):
 
         self.model_selection_var = tk.StringVar()
         self.model_selection = ttk.Combobox(self.task_selection_frame, textvariable=self.model_selection_var,
-                                            values=list(self.app.task_registry.get_current_models()))
+                                            values=["None"] + list(self.app.task_registry.get_current_models()))
         self.model_selection.bind("<<ComboboxSelected>>",
                                   lambda x: (self.app.task_registry.get_current_task()
                                              .choose_model(self.model_selection_var.get()), self.update_labels()))
@@ -320,7 +317,7 @@ class ClusteringFrame(ViewBase):
         registry.validate_selection()
         task_names = list(registry.tasks)
         self.task_selection.config(values=task_names)
-        model_names = list(registry.get_current_models())
+        model_names = ["None"] + list(registry.get_current_models())
         self.model_selection.config(values=model_names)
         embedder_names = list(self.app.embstore_registry.stores)
         self.embedder_selection.config(values=embedder_names)
@@ -477,7 +474,10 @@ class ClusteringFrame(ViewBase):
         tk.Label(self.item_preview_frame, text=f"<  {selected_meta.class_name}  >", name="preview_label").grid(row=1, column=0)
         if self.show_predictions_var.get():
             tk.Label(self.item_preview_frame,
-                     text=f"Prediction: {selected_meta.pred_name} \nOther: {selected_meta.meta} ", name="preview_prediction_label").grid(row=2, column=0)
+                     text=f"Prediction: {selected_meta.pred_name} \nOther: {selected_meta.meta} ",
+                     name="preview_prediction_label",
+                     wraplength=400,
+                     ).grid(row=2, column=0)
         ttk.Button(self.item_preview_frame,
                    text="Open in annotation tool",
                    command=lambda: (self.app.go_to_image(selected_meta.filename),

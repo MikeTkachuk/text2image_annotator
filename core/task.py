@@ -85,16 +85,13 @@ class Task:
                 if sum(categories) > 1:
                     label = -5
                 else:
-                    if empty_is_category:
-                        if any(categories):
+                    if any(categories):
+                        if empty_is_category:
                             label = categories.index(True) + 1
                         else:
-                            label = 0
-                    else:
-                        if any(categories):
                             label = categories.index(True)
-                        else:
-                            label = -5
+                    else:
+                        label = -1  # labelling contains positive class only by design
             else:
                 label = -1
             self.labels[sample] = label
@@ -172,6 +169,8 @@ class Task:
         return task
 
     def choose_model(self, model_name=None):
+        if model_name == "None":
+            model_name = None
         assert model_name in self.models or model_name is None
         self._current_model = model_name
         print("model: ", self._current_model)

@@ -210,6 +210,12 @@ class Model:
         self._predictions = {}
         use_augs = self.params.get("augs", use_augs)
         labeled_data = [s for s in dataset if dataset[s] >= 0]
+        n_classes = len(set([dataset[s] for s in labeled_data]))
+        assert n_classes > 1
+        average_mode = "binary" if n_classes == 2 else "macro"
+        callback(f"Number of classes: {n_classes}")
+        callback(f"Selected averaging mode: {average_mode}")
+        callback(f"Number of annotated samples: {len(labeled_data)}")
 
         callback(f"Framework route: {self.framework}")
         start = time.time()
@@ -229,9 +235,9 @@ class Model:
                         return
                     _pred_test = self._model_obj.predict(X_test)
                     m = {
-                        "f1_score": f1_score(y_test, _pred_test),
-                        "precision": precision_score(y_test, _pred_test),
-                        "recall": recall_score(y_test, _pred_test)
+                        "f1_score": f1_score(y_test, _pred_test, average=average_mode),
+                        "precision": precision_score(y_test, _pred_test, average=average_mode),
+                        "recall": recall_score(y_test, _pred_test, average=average_mode)
                     }
                     callback(f'epoch eval metrics: {m}')
 
@@ -258,9 +264,9 @@ class Model:
             if len(X_test):
                 pred_test = self._model_obj.predict(X_test)
                 metrics.append({
-                    "f1_score": f1_score(y_test, pred_test),
-                    "precision": precision_score(y_test, pred_test),
-                    "recall": recall_score(y_test, pred_test)
+                    "f1_score": f1_score(y_test, pred_test, average=average_mode),
+                    "precision": precision_score(y_test, pred_test, average=average_mode),
+                    "recall": recall_score(y_test, pred_test, average=average_mode)
                 })
             else:
                 metrics.append({})

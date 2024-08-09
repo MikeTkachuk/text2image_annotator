@@ -12,7 +12,7 @@ from PIL import ImageTk
 from tqdm import tqdm
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox, simpledialog, scrolledtext
 
 from core.embedding import EmbeddingStoreRegistry
 from core.task import TaskRegistry
@@ -175,6 +175,11 @@ class App:
                     self._image_paths = []
                     return
 
+            file_count_diff = len(self._image_paths) - self.session_config["total_files"]
+            if file_count_diff != 0:
+                print(f"Reporting a cumulative change of {file_count_diff} files. Progress is unaffected.")
+                self.session_config["total_files"] = len(self._image_paths)
+
         self.embstore_registry = EmbeddingStoreRegistry(self._get_session_dir(), self.get_data_folder())
         for model_name in ["openai/clip-vit-base-patch32",
                            "openai/clip-vit-large-patch14"]:
@@ -220,6 +225,7 @@ class App:
 
     def get_current_meta(self):
         """Fetches available annotations for current image"""
+        # todo: alert if is a duplicate, preview existing annotation
         if not self.is_initialized:
             return {}
         return self.session_config["data"].get(self._image_paths[self._current_index], {})
@@ -373,6 +379,7 @@ class App:
     def register_duplicates(self, path_pairs):
         """Transforms pairs of similar samples into duplicate<->representative map.
         Will be used to broadcast annotations back. Updates the samples used by tasks
+        Pairs should non-symmetrical, excluding self pairs
         """
         to_leave = set()
         duplicates = {}
@@ -483,6 +490,8 @@ class App:
             task_selection.config(values=task_names)
             if registry.is_initialized:
                 task_selection.current(task_names.index(registry.get_current_task_name()))
+                description.delete("1.0", "end")
+                description.insert("1.0", registry.get_current_task().description)
 
         window = tk.Toplevel(self.master, name="manage_tasks")
         window.title("Task settings")
@@ -516,13 +525,24 @@ class App:
                                         command=lambda: confirm_delete(self.task_registry.delete_task))
         delete_task_button.grid(row=0, column=2)
 
+        description = scrolledtext.ScrolledText(window, width=50, height=4, )
+        description.grid(row=1, column=0)
+
+        def update_descr(event):
+            task = self.task_registry.get_current_task()
+            if task is not None:
+                task.update_description(description.get("1.0", "end").strip())
+                description.edit_modified(False)
+
+        description.bind("<<Modified>>", update_descr)
+
         manage_model_button = ttk.Button(window, text="Manage models",
                                          command=self.manage_models_popup)
-        manage_model_button.grid(row=1, column=0)
+        manage_model_button.grid(row=2, column=0)
 
         # data split
         data_split_frame = Frame(window, name="data_split_frame")
-        data_split_frame.grid(row=2, column=0)
+        data_split_frame.grid(row=3, column=0)
 
         tk.Label(data_split_frame, text="Test split size:").grid(row=0, column=0)
         test_split_var = tk.StringVar()
@@ -646,6 +666,10 @@ class App:
         tk.Label(precompute_frame, text="Shuffle:").pack(side="left")
         do_shuffle = ttk.Checkbutton(precompute_frame, variable=do_shuffle_var)
         do_shuffle.pack(side="left")
+        tk.Label(precompute_frame, text="New only:").pack(side="left")
+        new_only_var = tk.BooleanVar(value=True)
+        new_only = ttk.Checkbutton(precompute_frame, variable=new_only_var)
+        new_only.pack(side="left")
 
         batch_size_frame = Frame(window, name="batch_size_frame", pack=True)
         batch_size_frame.pack()
@@ -682,7 +706,7 @@ class App:
                         break
 
                 # add existing samples to the pool if augs > 0
-                if int(aug_var.get()) > 0:
+                if int(aug_var.get()) > 0 and not new_only_var.get():
                     for sample in samples:
                         if store.embedding_exists(sample):
                             selected.append(sample)

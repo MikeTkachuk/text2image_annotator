@@ -190,11 +190,18 @@ class MLP:
         self._init(X)
         self.model = self.model.to(self.device)
         self.model.train()
-        loss_func = torch.nn.BCEWithLogitsLoss() if len(self._categories) == 2 else torch.nn.CrossEntropyLoss()
+
+        def loss_func(p, t):
+            if len(self._categories) == 2:
+                return torch.nn.BCEWithLogitsLoss()(p, t.float())
+            else:
+                return torch.nn.CrossEntropyLoss()(p, t.long())
 
         def train_metrics_func(_logits, _labels):
             _preds = self.predict(None, probas=self.get_proba(_logits))
-            return {"f1_score": f1_score(_labels.cpu().numpy(), _preds.detach().cpu().numpy())}
+            return {"f1_score": f1_score(_labels.cpu().numpy(),
+                                         _preds.detach().cpu().numpy(),
+                                         average="binary" if len(self._categories) == 2 else "macro")}
 
         dataloader = DataLoader(X, batch_size=self.batch_size, shuffle=True)
         optimizer = torch.optim.AdamW(self.model.parameters(),
@@ -213,8 +220,8 @@ class MLP:
                 if thread_killer.is_set(threading.current_thread().ident):
                     raise Exception("Canceled")
                 data, labels = batch
-                preds = self.model(data.to(self.device))
-                loss = loss_func(preds.squeeze(), labels.to(self.device))
+                preds = self.model(data.to(self.device)).squeeze()
+                loss = loss_func(preds, labels.to(self.device))
                 loss.backward()
                 losses.append(loss.item())
                 train_metrics.append(train_metrics_func(preds, labels))
@@ -222,7 +229,8 @@ class MLP:
             lr_sched.step()
             if should_log:
                 self.callback(f"Loss: {sum(losses) / len(losses)}")
-                aggregated_metrics = {k: sum(m[k] for m in train_metrics)/len(train_metrics) for k in train_metrics[0]}
+                aggregated_metrics = {k: sum(m[k] for m in train_metrics) / len(train_metrics) for k in
+                                      train_metrics[0]}
                 self.callback(f"Train metrics: {aggregated_metrics}")
                 self.model.eval()
                 test_func()
@@ -232,7 +240,7 @@ class MLP:
 
     @staticmethod
     def get_proba(logits):
-        if len(logits.shape) == 0 or logits.shape[-1] == 1:
+        if len(logits.shape) < 2:
             return torch.sigmoid(logits).flatten()
         else:
             assert len(logits.shape) == 2
@@ -249,7 +257,7 @@ class MLP:
             preds = self.model(data.to(self.device), dropout=dropout)
             all_logits.append(preds)
         all_logits = torch.cat(all_logits, dim=0)
-        return self.get_proba(all_logits)
+        return self.get_proba(all_logits.squeeze())
 
     @torch.no_grad()
     def predict(self, X, probas=None):
@@ -323,12 +331,12 @@ class MLP:
             order = []
             for slice_ in zip_longest(*cluster_bins.values()):
                 order.extend([s for s in slice_ if s is not None])
-            metas = [{"importance": score[i].item(),
-                      "proba": point_estimates[i].item(),
+            metas = [{"importance": score[i].tolist(),
+                      "proba": point_estimates[i].tolist(),
                       "cluster": clusters[i]}
                      for i in range(len(score))]
         else:
-            metas = [{"importance": score[i].item(), "proba": point_estimates[i].item()}
+            metas = [{"importance": score[i].tolist(), "proba": point_estimates[i].tolist()}
                      for i in range(len(score))]
             order = torch.argsort(score, descending=True).tolist()
 
