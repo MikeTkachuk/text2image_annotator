@@ -49,6 +49,7 @@ def draw_alpha_rect(img, pts, color=(50, 255, 100), alpha=0.5):
 
 class Clustering:
     """Handles dimensionality reduction, clustering, and drawing tasks"""
+
     def __init__(self, embstore_registry: EmbeddingStoreRegistry, task_registry: TaskRegistry):
         self.embstore_registry = embstore_registry
         self.task_registry = task_registry
@@ -143,7 +144,6 @@ class Clustering:
         :param augs: passed into data retriever
         :return:
         """
-
 
         if not self.task_registry.is_initialized:
             return

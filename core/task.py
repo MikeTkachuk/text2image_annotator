@@ -1,21 +1,40 @@
 import json
 import shutil
 from pathlib import Path
-from typing import Literal, Dict, get_args, Optional
+from enum import Enum
+from typing import Literal, Dict, Optional, List, Iterable
 
 from sklearn.model_selection import train_test_split
 
 from core.model import Model
 from core.embedding import EmbeddingStoreRegistry
 
-TASK_MULTICLASS_MODES = Literal["empty_valid", "empty_invalid"]
+
+class MulticlassMode(Enum):
+    empty_valid = "empty_valid"
+    empty_invalid = "empty_invalid"
+
+
+class SystemLabels(Enum):
+    EMPTY = 0
+    NOT_LABELED = -1
+    INVALID = -5
+
+    def display(self):
+        names = {
+            0: "Empty",
+            -1: "Not labeled",
+            -5: "Invalid"
+        }
+        return names[self.value]
 
 
 class Task:
     """Entity representing binary or multi-class classification.
     It controls the annotations, data split, and models"""
-    def __init__(self, categories, task_path, multiclass_mode: TASK_MULTICLASS_MODES = "empty_valid"):
-        self.multiclass_mode: TASK_MULTICLASS_MODES = multiclass_mode
+
+    def __init__(self, categories, task_path, multiclass_mode: MulticlassMode = MulticlassMode.empty_valid):
+        self.multiclass_mode: MulticlassMode = multiclass_mode
         self.path = Path(task_path)
         self.categories = categories
         if isinstance(self.categories, str):
@@ -43,24 +62,24 @@ class Task:
 
     def label_name(self, value: int):
         if value == -5:
-            return "Invalid"
+            return SystemLabels.INVALID.display()
         if value == -1:
-            return "Not labeled"
+            return SystemLabels.NOT_LABELED.display()
 
         return self.categories_full[value]
 
     def label_encode(self, name: str):
-        if name == "Invalid":
+        if name == SystemLabels.INVALID.display():
             return -5
-        if name == "Not labeled":
+        if name == SystemLabels.NOT_LABELED.display():
             return -1
         return self.categories_full.index(name)
 
     @property
     def categories_full(self):
         """Expands categories based on task multiclass mode"""
-        if self.multiclass_mode == "empty_valid" or len(self.categories) == 1:
-            return ["Empty"] + self.categories
+        if self.multiclass_mode == MulticlassMode.empty_valid or len(self.categories) == 1:
+            return [SystemLabels.EMPTY.display()] + self.categories
         return self.categories
 
     def update_labels(self, samples, labelling):
@@ -76,14 +95,14 @@ class Task:
         :param labelling: session data of form {sample_path: {"tags":[...], ...}}
         """
         self.labels = {}
-        empty_is_category = len(self.categories) == 1 or self.multiclass_mode == "empty_valid"
+        empty_is_category = len(self.categories) == 1 or self.multiclass_mode == MulticlassMode.empty_valid
         for sample in samples:
             if sample in self.user_override:
                 label = self.user_override[sample]
             elif sample in labelling:
                 categories = [c in labelling[sample]["tags"] for c in self.categories]
                 if sum(categories) > 1:
-                    label = -5
+                    label = SystemLabels.INVALID.value
                 else:
                     if any(categories):
                         if empty_is_category:
@@ -91,14 +110,14 @@ class Task:
                         else:
                             label = categories.index(True)
                     else:
-                        label = -1  # labelling contains positive class only by design
+                        label = SystemLabels.NOT_LABELED.value  # labelling contains positive class only by design
             else:
-                label = -1
+                label = SystemLabels.NOT_LABELED.value
             self.labels[sample] = label
 
     def override_label(self, sample: str, label: int):
         """Annotates the sample with a task-specific class"""
-        if label == -1:
+        if label == SystemLabels.NOT_LABELED.value:
             try:
                 self.user_override.pop(sample)
             except KeyError:
@@ -129,7 +148,7 @@ class Task:
 
     def __dict__(self):
         out = {"models": {},
-               "multiclass_mode": self.multiclass_mode,
+               "multiclass_mode": self.multiclass_mode.name,
                "categories": self.categories,
                "user_override": self.user_override,
                "description": self.description,
@@ -141,7 +160,7 @@ class Task:
 
     def save_state(self):
         out = {"models": {},
-               "multiclass_mode": self.multiclass_mode,
+               "multiclass_mode": self.multiclass_mode.name,
                "categories": self.categories,
                "user_override": self.user_override,
                "description": self.description,
@@ -160,7 +179,7 @@ class Task:
         """Loads an instance of task and all of its models"""
         with open(path) as file:
             data = json.load(file)
-        task = Task(data["categories"], path, data["multiclass_mode"])
+        task = Task(data["categories"], path, MulticlassMode(data["multiclass_mode"]))
         task.user_override = data["user_override"]
         task.description = data.get("description", "")
         task.validation_samples = data.get("validation_samples", [])
@@ -190,6 +209,7 @@ class Task:
 
 class TaskRegistry:
     """Controls validity and serialization of all tasks in a session"""
+
     def __init__(self, dataset, all_samples, embstore_registry: EmbeddingStoreRegistry, save_dir):
         self._dataset = dataset
         self._all_samples = all_samples
@@ -231,7 +251,7 @@ class TaskRegistry:
     @staticmethod
     def get_task_modes():
         """Shortcut to get possible multiclass modes"""
-        return get_args(TASK_MULTICLASS_MODES)
+        return [n.name for n in MulticlassMode]
 
     def get_current_task(self) -> Optional[Task]:
         if self.is_initialized:
@@ -269,10 +289,11 @@ class TaskRegistry:
             used_tags.update(task.categories)
         return used_tags
 
-    def add_task(self, tags, mode: TASK_MULTICLASS_MODES = "empty_valid"):
+    def add_task(self, tags, mode: MulticlassMode = MulticlassMode.empty_valid):
         """Handles task creation, validation, and naming"""
-        if not tags or mode not in self.get_task_modes():
-            raise RuntimeError(f"Invalid tags {tags} or mode {mode}")
+        if not tags:
+            raise RuntimeError(f"Invalid tags {tags}")
+        assert len(set(tags)) == len(tags), "Tags must be unique"
         tags = sorted(tags)
         used_tags = self.get_tags_in_use()
         for tag in tags:  # can't create overlapping tasks for it will be impossible to merge
@@ -280,7 +301,7 @@ class TaskRegistry:
                 raise RuntimeError(f"Tag \"{tag}\" already used")
 
         task_name = "_".join(tags)
-        if mode == "empty_valid" or len(tags) == 1:
+        if mode == MulticlassMode.empty_valid or len(tags) == 1:
             task_name += "_empty"
         if task_name in self.tasks:
             raise RuntimeError("This task already exists")
@@ -399,12 +420,85 @@ class TaskRegistry:
             return None
         return self.get_current_task().labels
 
-    def delete_task(self):
-        if self._current_task is None:
-            return
-        self._get_task_path(self._current_task).unlink()
-        shutil.rmtree(self._get_model_path(self._current_task, "dummy").parent)
-        self.tasks.pop(self._current_task)
-        self._current_task = None
-        self.save_state()
+    def merge_tasks(self, task_names: Iterable[str], mode: MulticlassMode = MulticlassMode.empty_valid, dry_run=False):
+        tasks = []
+        for task_name in task_names:
+            assert task_name in self.tasks
+            task = self.tasks[task_name]
+            tasks.append(task)
+        assert len(tasks) > 1, "Can't merge less than 2 tasks"
+        # rules:
+        # all empty -> empty/invalid
+        # at least one not labeled + empty rest -> not labeled
+        # any positive class -> copy it
+        # multiple positive classes -> invalid
+        # any invalid -> invalid
+        new_override = {}
+        all_samples = set(sum((list(t.user_override.keys()) for t in tasks), []))
+        for sample in all_samples:
+            label_slice = [t.label_name(t.user_override.get(sample, SystemLabels.NOT_LABELED.value)) for t in tasks]
+            if all([l == SystemLabels.EMPTY.display() for l in label_slice]):
+                new_override[sample] = SystemLabels.EMPTY.display() if mode == MulticlassMode.empty_valid \
+                    else SystemLabels.INVALID.display()
+            elif any([l == SystemLabels.NOT_LABELED.display() for l in label_slice]) and \
+                    all([l == SystemLabels.EMPTY.display() or l == SystemLabels.NOT_LABELED.display() for l in
+                         label_slice]):
+                new_override[sample] = SystemLabels.NOT_LABELED.display()
+            elif any([l == SystemLabels.INVALID.display() for l in label_slice]):
+                new_override[sample] = SystemLabels.INVALID.display()
+            else:
+                system_labels = {SystemLabels.NOT_LABELED.display(), SystemLabels.EMPTY.display()}
+                tags = [l for l in label_slice if l not in system_labels]
+                if len(tags) > 1:
+                    new_override[sample] = SystemLabels.INVALID.display()
+                else:
+                    new_override[sample] = tags[0]
 
+        new_description = ""
+        for i, name in enumerate(task_names):
+            new_description += f"{i + 1}. {name}\n"
+            new_description += self.tasks[name].description + "\n"
+
+        new_tags = set()
+        for task in tasks:
+            new_tags.update(task.categories)
+
+        invalid_count = sum(val == SystemLabels.INVALID.display() for val in new_override.values())
+        sample_overlap = (1 - len(new_override) / sum(len(t.user_override) for t in tasks)) * 100
+        message = f"Can be merged with {invalid_count} invalid samples. Sample overlap: {sample_overlap:.2f}%"
+        if dry_run:
+            return message
+        try:
+            for name in task_names:
+                self.delete_task(name)
+            self.add_task(new_tags, mode)
+            task = self.get_current_task()
+            task.description = new_description
+            for sample in new_override:
+                encoded = task.label_encode(new_override[sample])
+                if encoded != SystemLabels.NOT_LABELED.value:
+                    task.user_override[sample] = encoded
+
+            self.save_state()
+        except Exception as e:
+            import traceback
+            traceback.print_exception(e)
+            # rollback. does not restore models
+            for task_name, task in zip(task_names, tasks):
+                self.tasks[task_name] = task
+                task.save_state()
+            self.save_state()
+            return "Failed. Attempted rolling back"
+        return f"Success! Task {self._current_task} created"
+
+    def delete_task(self, task_name: str = None):
+        if task_name is None:
+            task_name = self._current_task
+        if task_name is None:
+            return
+        self._get_task_path(task_name).unlink()
+        shutil.rmtree(self._get_model_path(task_name, "dummy").parent, ignore_errors=True)
+        self.tasks.pop(task_name)
+        if task_name == self._current_task:
+            self._current_task = None
+        self.save_state()

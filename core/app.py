@@ -15,7 +15,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog, scrolledtext
 
 from core.embedding import EmbeddingStoreRegistry
-from core.task import TaskRegistry
+from core.task import TaskRegistry, MulticlassMode
 from core.clustering import Clustering
 from core.utils import sort_with_ranks
 from views import *
@@ -525,6 +525,36 @@ class App:
                                         command=lambda: confirm_delete(self.task_registry.delete_task))
         delete_task_button.grid(row=0, column=2)
 
+        def merge_tasks_popup():
+            popup = tk.Toplevel(window, name="merge_tasks")
+            popup.title("Merge tasks")
+            tk.Label(popup, text="Select tasks to merge:").pack(side="top")
+            task_selector = ttk.Treeview(popup, selectmode="extended", height=10)
+            task_selector.pack(side="top")
+            for task in self.task_registry.tasks:
+                task_selector.insert("", "end", task, text=task)
+
+            task_mode_var = tk.StringVar()
+            task_mode_var.set(self.task_registry.get_task_modes()[0])
+            task_mode_selection = ttk.OptionMenu(popup, task_mode_var, self.task_registry.get_task_modes()[0],
+                                                 *self.task_registry.get_task_modes())
+            task_mode_selection.pack(side="top")
+
+            def run():
+                msg = self.task_registry.merge_tasks(task_selector.selection(),
+                                                     MulticlassMode(task_mode_var.get()), dry_run=True)
+                if messagebox.askokcancel(title="Confirm merge", message=f"{msg}\nAll models will be lost\nContinue?", parent=popup):
+                    msg = self.task_registry.merge_tasks(task_selector.selection(),
+                                                   MulticlassMode(task_mode_var.get()), dry_run=False)
+                    messagebox.showinfo(message=msg, parent=popup)
+
+            ttk.Button(popup, text="Create", command=lambda: run()).pack(side="top")
+
+        ttk.Button(task_selection_frame,
+                   text="Merge tasks",
+                   command=merge_tasks_popup,
+                   ).grid(row=1, column=0, columnspan=2)
+
         description = scrolledtext.ScrolledText(window, width=50, height=4, )
         description.grid(row=1, column=0)
 
@@ -542,7 +572,7 @@ class App:
 
         # data split
         data_split_frame = Frame(window, name="data_split_frame")
-        data_split_frame.grid(row=3, column=0)
+        data_split_frame.grid(row=3, column=0, pady=10)
 
         tk.Label(data_split_frame, text="Test split size:").grid(row=0, column=0)
         test_split_var = tk.StringVar()

@@ -332,14 +332,16 @@ class Model:
 
     def next_annotation_suggestion(self):
         """Returns the next suggested sample to annotate"""
-        self._suggestion_cursor = self._suggestion_cursor + 1
+        self._suggestion_cursor += 1
         if self._suggestion_cursor == len(self._suggestions):
+            self._suggestion_cursor -= 1
             return None
         return self._suggestions[self._suggestion_cursor]
 
     def prev_annotation_suggestion(self):
         """Returns the previous suggested sample to annotate"""
-        self._suggestion_cursor = self._suggestion_cursor - 1
+        self._suggestion_cursor -= 1
         if self._suggestion_cursor < 0:
+            self._suggestion_cursor += 1
             return None
         return self._suggestions[self._suggestion_cursor]

@@ -65,6 +65,8 @@ class ClusteringFrame(ViewBase):
             class_filter.pack()
             for _, class_name in self.app.clustering.get_legend():
                 class_filter.insert("", "end", class_name, text=class_name)
+            if self._filter.get("task_name") != self.app.task_registry.get_current_task_name():
+                self._filter = {}
             if self._filter.get("class_name"):
                 class_filter.selection_set(self._filter["class_name"])
 
@@ -121,6 +123,7 @@ class ClusteringFrame(ViewBase):
                     self._filter["split"] = split_var.get()
                     self._filter["version"] = version_var.get()
                     self._filter["special"] = special_var.get()
+                    self._filter["task_name"] = self.app.task_registry.get_current_task_name()
                 window.destroy()
 
             reset = ttk.Button(window, text="Reset", command=lambda: closure(do_reset=True))

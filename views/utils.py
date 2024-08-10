@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+
+from core.task import MulticlassMode
+
 if TYPE_CHECKING:
     from core.app import App
 
@@ -145,7 +148,7 @@ def task_creation_popup(app: App, callback):
         try:
             if any([tag_choice.get_children(t) for t in tag_choice.selection()]):
                 raise RuntimeError("Selected non-leaf nodes")
-            app.task_registry.add_task(tag_choice.selection(), task_mode_var.get())
+            app.task_registry.add_task(tag_choice.selection(), MulticlassMode(task_mode_var.get()))
             callback()
         except RuntimeError as e:
             error_label.config(text=str(e))
