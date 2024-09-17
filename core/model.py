@@ -18,7 +18,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, precision_score, recall_score
 
 from core.mlp import MLP
-from core.utils import TrainDataset
+from core.utils import TrainDataset, print_callback
 
 
 class Model:
@@ -199,7 +199,7 @@ class Model:
         :return: final metrics
         """
         if callback is None:
-            callback = print
+            callback = print_callback
         if kfold is None:
             kfold = 1
 
@@ -212,6 +212,8 @@ class Model:
         labeled_data = [s for s in dataset if dataset[s] >= 0]
         n_classes = len(set([dataset[s] for s in labeled_data]))
         assert n_classes > 1
+        n_missing_classes = max([dataset[s] for s in labeled_data]) + 1 - n_classes
+        assert n_missing_classes == 0, f"Missing data for {n_missing_classes} classes"
         average_mode = "binary" if n_classes == 2 else "macro"
         callback(f"Number of classes: {n_classes}")
         callback(f"Selected averaging mode: {average_mode}")
@@ -240,6 +242,7 @@ class Model:
                         "recall": recall_score(y_test, _pred_test, average=average_mode)
                     }
                     callback(f'epoch eval metrics: {m}')
+                    callback(m, mode="plot")
 
                 callback("Starting fit...")
                 self._model_obj.fit(X, y, test_func=test_func)

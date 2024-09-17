@@ -3,13 +3,14 @@ import pickle
 from pathlib import Path
 import threading
 from itertools import zip_longest
+from typing import Callable
 
 import torch
 from torch.utils.data import DataLoader
 from sklearn.metrics import f1_score
 from sklearn.cluster import BisectingKMeans
 
-from core.utils import thread_killer, TrainDataset
+from core.utils import thread_killer, TrainDataset, print_callback
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -127,7 +128,7 @@ class MLP:
 
         self._categories = None
         self.model: torch.nn.Module = None
-        self.callback = print
+        self.callback: Callable = print_callback
 
     def _init(self, dataset):
         _activations_lookup = {
@@ -225,6 +226,10 @@ class MLP:
                 loss.backward()
                 losses.append(loss.item())
                 train_metrics.append(train_metrics_func(preds, labels))
+                self.callback({"train_loss": losses[-1],
+                               "train_f1": train_metrics[-1]["f1_score"],
+                               "lr": lr_sched.get_last_lr()[0]
+                               }, mode="plot")
                 optimizer.step()
             lr_sched.step()
             if should_log:

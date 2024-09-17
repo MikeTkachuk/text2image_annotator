@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 from threading import Thread
 
 import tkinter as tk
-from tkinter import ttk, simpledialog
+from tkinter import ttk, simpledialog, messagebox
 from PIL import ImageTk, Image
 
 from views.view_base import ViewBase
@@ -39,6 +39,7 @@ class ClusteringFrame(ViewBase):
 
         self.cursor_size = 0.025
         self._selection_data: Dict[int, SampleInfo] = None
+        self._metadata = {}
         self._reload_next_nn = False
         self._filter = {}
         self._cluster_params = {}
@@ -315,6 +316,17 @@ class ClusteringFrame(ViewBase):
         self.reload_comboboxes()
         self.show_clustering_result()
 
+    def restore_preview_state(self):
+        x = self._metadata.get("last_x")
+        y = self._metadata.get("last_y")
+        if x is not None and y is not None:
+            self.populate_neighbors(None, x=x, y=y)
+        selected_id = self._metadata.get("last_selected_id")
+        if selected_id is not None:
+            self.neighbor_choice.focus_set()
+            self.neighbor_choice.selection_set(selected_id)
+            self.neighbor_choice.focus(selected_id)
+
     def reload_comboboxes(self):
         registry = self.app.task_registry
         registry.validate_selection()
@@ -340,6 +352,7 @@ class ClusteringFrame(ViewBase):
         else:
             self.embedder_selection_var.set("")
         self.update_labels()
+        self.restore_preview_state()
 
     def show_clustering_result(self):
         img = self.app.clustering.get_base_plot()
@@ -354,19 +367,23 @@ class ClusteringFrame(ViewBase):
                              image=image,
                              text=name, compound="left")
             label.image = image
-            label.grid(row=0, column=i)
+            label.grid(row=i // 5, column=i % 5)
 
     def compute_clustering(self):
         self.clustering_button.config(state="disabled", text="Running...")
 
         def target():
             self.app.clustering.cluster(**self._cluster_params)
+            self._metadata = {}
             try:
                 self.show_clustering_result()
                 self.clustering_button.config(state="normal", text="Compute")
 
             except tk.TclError:
                 pass
+            except Exception as e:
+                messagebox.showerror(title="Error", message=str(e))
+                self.clustering_button.config(state="normal", text="Compute")
 
         t = Thread(target=target)
         t.start()
@@ -410,14 +427,16 @@ class ClusteringFrame(ViewBase):
             self._reload_next_nn = False
             self.update_labels(idle=True)
         if x is None or y is None:
+            assert event is not None
             x = event.x
             y = event.y
+        self._metadata["last_x"] = x
+        self._metadata["last_y"] = y
         out = self.app.clustering.get_nearest_neighbors(x, y, self.cursor_size)
         if out is None:
             return
         viz = out[-1]
-        self.clustering_output.config(
-            image=viz),
+        self.clustering_output.config(image=viz)
         self.clustering_output.image = viz
         for item in self.neighbor_choice.get_children():
             self.neighbor_choice.delete(item)
@@ -461,10 +480,10 @@ class ClusteringFrame(ViewBase):
         if not self.neighbor_choice.selection():
             return
         selected_id = self.neighbor_choice.selection()[0]
+        self._metadata["last_selected_id"] = selected_id
         selected_meta = self._selection_data[int(selected_id)]
         img = self.app.clustering.draw_selection([selected_meta.id_])
-        self.clustering_output.config(
-            image=img),
+        self.clustering_output.config(image=img)
         self.clustering_output.image = img
 
         img_label = tk.Label(self.item_preview_frame)
@@ -474,7 +493,8 @@ class ClusteringFrame(ViewBase):
         img_label.image = photo
         img_label.grid(row=0, column=0)
 
-        tk.Label(self.item_preview_frame, text=f"<  {selected_meta.class_name}  >", name="preview_label").grid(row=1, column=0)
+        tk.Label(self.item_preview_frame, text=f"<  {selected_meta.class_name}  >", name="preview_label").grid(row=1,
+                                                                                                               column=0)
         if self.show_predictions_var.get():
             tk.Label(self.item_preview_frame,
                      text=f"Prediction: {selected_meta.pred_name} \nOther: {selected_meta.meta} ",

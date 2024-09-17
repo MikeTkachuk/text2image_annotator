@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PIL import ImageTk
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ from tkinter import ttk, scrolledtext
 
 from views.view_base import ViewBase
 from views.utils import Frame, task_creation_popup, model_creation_popup, documentation_popup
-from core.utils import thread_killer
+from core.utils import thread_killer, tk_plot
 
 
 # todo: duplicate model/save model template
@@ -149,8 +150,12 @@ class TrainingFrame(ViewBase):
 
         self.log_frame = Frame(self.right_frame, name="log_frame")
         self.log_frame.grid(row=0, column=0)
-        self.log = scrolledtext.ScrolledText(self.log_frame, height=30, state="disabled")
+        self.log = scrolledtext.ScrolledText(self.log_frame, height=30, state="disabled", width=60)
         self.log.grid(row=0, column=0)
+        self.viz_frame = Frame(self.log_frame, name="viz_frame")
+        self.viz_frame.grid(row=1, column=0)
+        self.graph_label = tk.Label(self.viz_frame)
+        self.graph_label.grid(row=0, column=0)
 
         # on load
         self.log_update(self._logs, overwrite=True)
@@ -282,16 +287,49 @@ class TrainingFrame(ViewBase):
                 return
             model.params = new_params
 
-            def callback(val, end="\n"):
-                self.log_update(val, end=end, overwrite=False)
-                print(val, end=end)
+            to_plot = []
+
+            def callback(val, end="\n", mode="text"):
+                """
+
+                :param val: value to log. if mode == "plot" should be dict
+                :param end: if mode == "text" uses as an arg to print()
+                :param mode: "text" or "plot"
+                :return:
+                """
+                if mode == "text":
+                    self.log_update(val, end=end, overwrite=False)
+                    print(val, end=end)
+                elif mode == "plot":
+                    assert isinstance(val, dict), "Can only take dicts in plot mode"
+                    to_plot.append(val)
+                else:
+                    raise NotImplementedError
+
+            def show_plots():
+                transposed = {}
+                for step, entry in enumerate(to_plot):
+                    for key in entry:
+                        if key not in transposed:
+                            transposed[key] = []
+                        transposed[key].append((step, entry[key]))
+                fig, ax = None, None
+                for i, key in enumerate(transposed):
+                    fig, ax = tk_plot(*np.array(transposed[key]).T, fig=fig, ax=ax, render=False, label=key)
+                res = tk_plot(fig=fig, ax=ax, render=True, func_name="legend")
+                self.graph_label.config(image=res)
+                self.graph_label.image = res
+                self.log.configure(height=12)
 
             def target():
                 self.app.task_registry.fit_current_model(callback=callback, **self._training_params)
+
                 import gc
                 gc.collect()
                 import torch
                 torch.cuda.empty_cache()
+
+                show_plots()
 
             self._training_thread = Thread(target=target)
             self._training_thread.daemon = True

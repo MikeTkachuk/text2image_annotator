@@ -11,12 +11,13 @@ if TYPE_CHECKING:
 
 from functools import partial
 from threading import Event
-from PIL import Image
+from PIL import Image, ImageTk
 import numpy as np
 
 import torch
 from torch.utils.data import Dataset
 from torchvision.transforms import v2
+import matplotlib.pyplot as plt
 
 
 def sort_with_ranks(seq, ranks, reverse=True, return_rank=True):
@@ -84,11 +85,11 @@ class PrecomputeDataset(Dataset):
     def show_sample(self, idx=0, n_runs=16):
         side_length = int(np.sqrt(n_runs))
         img_size = 224
-        out = np.zeros((img_size*side_length, img_size*side_length, 3), dtype=np.uint8)
+        out = np.zeros((img_size * side_length, img_size * side_length, 3), dtype=np.uint8)
         for i in range(side_length):
             for k in range(side_length):
                 img = np.asarray(SquarePad(img_size)(self.__getitem__(idx)[0]))
-                out[i*img_size:(i+1)*img_size, k*img_size:(k+1)*img_size] = img.astype(np.uint8)
+                out[i * img_size:(i + 1) * img_size, k * img_size:(k + 1) * img_size] = img.astype(np.uint8)
         return out
 
     def __getitem__(self, idx):
@@ -164,7 +165,39 @@ def timer(func):
         out = func(*args, **kwargs)
         print(f"Call to {func.__qualname__} elapsed: {time.time() - start:.4f}")
         return out
+
     return wrapped
+
+
+def plt_non_interactive(func):
+    def wrapped(*args, **kwargs):
+        old_backend = plt.get_backend()
+        plt.switch_backend("Agg")
+        out = func(*args, **kwargs)
+        plt.switch_backend(old_backend)
+        return out
+
+    return wrapped
+
+
+@plt_non_interactive
+def tk_plot(*args, fig: plt.Figure = None, ax: plt.Axes = None, render=True, func_name="plot", **kwargs):
+    if fig is None or ax is None:
+        fig, ax = plt.subplots()
+    getattr(ax, func_name)(*args, **kwargs)
+    if render:
+        fig.tight_layout()
+        fig.canvas.draw()
+        buf = fig.canvas.tostring_rgb()
+        ncols, nrows = fig.canvas.get_width_height()
+        image = Image.fromarray(np.frombuffer(buf, dtype=np.uint8).reshape(nrows, ncols, 3))
+        image = image.resize((400, 400))
+        return ImageTk.PhotoImage(image)
+    return fig, ax
+
+
+def print_callback(value, end="\n", mode=None):
+    print(value, end=end)
 
 
 # globals
