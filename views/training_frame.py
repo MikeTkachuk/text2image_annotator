@@ -316,7 +316,7 @@ class TrainingFrame(ViewBase):
                 fig, ax = None, None
                 for i, key in enumerate(transposed):
                     fig, ax = tk_plot(*np.array(transposed[key]).T, fig=fig, ax=ax, render=False, label=key)
-                res = tk_plot(fig=fig, ax=ax, render=True, func_name="legend")
+                res = tk_plot(fig=fig, ax=ax, render=True, func_name="legend", fontsize="small")
                 self.graph_label.config(image=res)
                 self.graph_label.image = res
                 self.log.configure(height=12)
