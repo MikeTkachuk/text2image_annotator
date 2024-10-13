@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import random
 import textwrap
@@ -7,6 +8,7 @@ from functools import partial
 from threading import Thread
 
 from pathlib import Path
+from typing import List
 
 from PIL import ImageTk
 from tqdm import tqdm
@@ -47,6 +49,7 @@ class App:
 
         # processors
         self.clustering: Clustering = None
+        self.ranking: _ImagePairManager = None
 
         # config values
         self.sort_mode = "alphabetic"
@@ -55,11 +58,13 @@ class App:
         self.views = namedtuple("Views", [
             "main",
             "clustering",
-            "training"
+            "training",
+            "ranking"
         ])(
             main=MainFrame(self),
             clustering=ClusteringFrame(self),
-            training=TrainingFrame(self)
+            training=TrainingFrame(self),
+            ranking=RankingFrame(self)
         )
         self.current_view: ViewBase = self.views.main
         self.current_view.render()
@@ -188,6 +193,7 @@ class App:
         self.task_registry = TaskRegistry(self.session_config["data"], valid_samples, self.embstore_registry,
                                           save_dir=self._get_session_dir())
         self.clustering = Clustering(self.embstore_registry, self.task_registry)
+        self.ranking = _ImagePairManager(self._image_paths, save_dir=self._get_session_dir())
         self.full_session_config["meta"]["last_session"] = str(session_dir)
         self._load_session_metadata()
         self.save_state()
@@ -411,7 +417,9 @@ class App:
         self.task_registry._all_samples = valid_samples
         self.save_state()
 
+    # =======
     # popups
+    # =======
     def session_info_popup(self):
         from PIL import Image
         window = tk.Toplevel(self.master)
@@ -543,9 +551,10 @@ class App:
             def run():
                 msg = self.task_registry.merge_tasks(task_selector.selection(),
                                                      MulticlassMode(task_mode_var.get()), dry_run=True)
-                if messagebox.askokcancel(title="Confirm merge", message=f"{msg}\nAll models will be lost\nContinue?", parent=popup):
+                if messagebox.askokcancel(title="Confirm merge", message=f"{msg}\nAll models will be lost\nContinue?",
+                                          parent=popup):
                     msg = self.task_registry.merge_tasks(task_selector.selection(),
-                                                   MulticlassMode(task_mode_var.get()), dry_run=False)
+                                                         MulticlassMode(task_mode_var.get()), dry_run=False)
                     messagebox.showinfo(message=msg, parent=popup)
 
             ttk.Button(popup, text="Create", command=lambda: run()).pack(side="top")
@@ -903,3 +912,78 @@ class App:
         reload()
         window.focus_set()
         window.bind("<Return>", lambda x: window.destroy())
+
+
+@dataclasses.dataclass
+class _ImagePair:
+    pair: tuple
+    meta: dict
+
+
+class _ImagePairManager:
+    def __init__(self, paths: list, save_dir):
+        self.paths = paths
+        self.state: List[_ImagePair] = []
+        self.save_path = Path(save_dir) / "ranking.json"
+
+        self._cache = {}
+        self._cursor = -1
+        self._id_pool = list(range(len(self.paths)))
+
+        self.load()
+
+    @property
+    def max_num_pairs(self):
+        return (len(self.paths)**2 - len(self.paths))/2
+
+    def load(self):
+        if self.save_path.exists():
+            # todo: check if paths changed. remap to fix if needed
+            state = json.loads(self.save_path.read_text())["state"]
+        else:
+            state = []
+        self.state = []
+        for pair_data in state:
+            self.state.append(_ImagePair(pair=tuple(pair_data["pair"]), meta=pair_data["meta"]))
+
+        self._cursor = len(self.state) - 1
+        self._cache = set(p.pair for p in self.state)
+
+    def save(self):
+        state = [{"pair": p.pair, "meta": p.meta} for p in self.state]
+        to_save = {"state": state, "paths": self.paths}
+        self.save_path.write_text(json.dumps(to_save))
+
+    def get_current_state(self, decode=False):
+        if self._cursor < 0:
+            self.next_pair()
+        if decode:
+            pair = self.state[self._cursor]
+            path_pair = (self.paths[pair.pair[0]], self.paths[pair.pair[1]])
+            return _ImagePair(pair=path_pair, meta=pair.meta)
+        return self.state[self._cursor]
+
+    def next_pair(self):
+        if self._cursor >= self.max_num_pairs - 1:
+            return self.get_current_state()
+        self._cursor += 1
+        if self._cursor >= len(self.state):
+            while True:
+                pair = (random.choice(self._id_pool), random.choice(self._id_pool))
+                pair = (min(pair), max(pair))
+                if pair in self._cache or pair[0] == pair[1]:
+                    continue
+
+                self.state.append(_ImagePair(pair=pair, meta={}))
+                self.save()
+                break
+        return self.get_current_state()
+
+    def prev_pair(self):
+        if self._cursor > 0:
+            self._cursor -= 1
+        return self.get_current_state()
+
+    def update_meta(self, key, value):
+        self.get_current_state().meta[key] = value
+        self.save()
